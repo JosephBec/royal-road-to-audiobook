@@ -1,0 +1,316 @@
+"""
+Chapter API routes.
+
+Handles chapter listing, audio streaming, and synthesis status.
+"""
+
+import logging
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from database import get_db, Novel, Chapter, Settings, Progress
+from scraper import scrape_chapter_text
+from tts import (
+    synthesize_chapter_to_file, synthesize_chapter_streaming,
+    get_chapter_status, get_streaming_state,
+    prefetch_next_chapter, cleanup_temp_files,
+    temp_path_for_chapter, _segment_path,
+)
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api", tags=["chapters"])
+
+
+class ChapterResponse(BaseModel):
+    id: int
+    novel_id: int
+    title: str
+    order: int
+    rr_url: str
+    word_count: int
+    published_at: str | None
+    is_current: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class ChapterListResponse(BaseModel):
+    chapters: list[ChapterResponse]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
+@router.get("/novels/{novel_id}/chapters", response_model=ChapterListResponse)
+async def list_chapters(
+    novel_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=10000),
+    db: Session = Depends(get_db),
+):
+    """Get paginated chapter list for a novel."""
+    novel = db.query(Novel).filter(Novel.id == novel_id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+
+    settings = db.query(Settings).first()
+    sort_order = (settings.chapter_sort if settings else "asc")
+
+    total = db.query(Chapter).filter(Chapter.novel_id == novel_id).count()
+    order_col = Chapter.order.asc() if sort_order == "asc" else Chapter.order.desc()
+    chapters = (
+        db.query(Chapter)
+        .filter(Chapter.novel_id == novel_id)
+        .order_by(order_col)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    progress = db.query(Progress).filter(Progress.novel_id == novel_id).first()
+    current_chapter_id = progress.chapter_id if progress else None
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    return ChapterListResponse(
+        chapters=[
+            ChapterResponse(
+                id=ch.id,
+                novel_id=ch.novel_id,
+                title=ch.title,
+                order=ch.order,
+                rr_url=ch.rr_url,
+                word_count=ch.word_count or 0,
+                published_at=ch.published_at.isoformat() if ch.published_at else None,
+                is_current=(ch.id == current_chapter_id),
+            )
+            for ch in chapters
+        ],
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+    )
+
+
+@router.get("/chapters/{chapter_id}/stream")
+async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
+    """
+    Serve synthesized audio for a chapter.
+    Always returns a complete WAV file (synthesizes first if needed).
+    Playback speed is controlled client-side via audio.playbackRate.
+    """
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    settings = db.query(Settings).first()
+    voice = settings.voice if settings else "af_heart"
+
+    # Check if already synthesized
+    existing_path = temp_path_for_chapter(chapter_id)
+    if existing_path.exists():
+        return FileResponse(
+            path=str(existing_path),
+            media_type="audio/wav",
+            filename=f"chapter_{chapter_id}.wav",
+        )
+
+    # Scrape chapter text if not cached
+    try:
+        text = await scrape_chapter_text(chapter.rr_url)
+    except Exception as e:
+        logger.error("Failed to scrape chapter text: %s", e)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
+
+    # Update word count
+    word_count = len(text.split())
+    if chapter.word_count != word_count:
+        chapter.word_count = word_count
+        chapter.fetched_at = datetime.now(timezone.utc)
+        db.commit()
+
+    # Synthesize full file then serve (speed=1.0, playback speed is client-side)
+    path = await synthesize_chapter_to_file(chapter_id, text, voice, 1.0)
+    return FileResponse(
+        path=str(path),
+        media_type="audio/wav",
+        filename=f"chapter_{chapter_id}.wav",
+    )
+
+
+@router.get("/chapters/{chapter_id}/status")
+async def chapter_status(chapter_id: int, db: Session = Depends(get_db)):
+    """Check if a chapter's audio is ready."""
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    status = get_chapter_status(chapter_id)
+    return status
+
+
+@router.post("/chapters/{chapter_id}/synthesize")
+async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
+    """
+    Start synthesizing a chapter in the background.
+    For 'instant' mode, uses segment-based streaming.
+    For 'full' mode, synthesizes entire file at once.
+    Returns immediately; client polls /status or /segments to check progress.
+    """
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Check if already done
+    status = get_chapter_status(chapter_id)
+    if status["ready"]:
+        return {**status, "mode": "full"}
+
+    settings = db.query(Settings).first()
+    voice = settings.voice if settings else "af_heart"
+    playback_mode = settings.playback_mode if settings else "full"
+
+    # Scrape text
+    try:
+        text = await scrape_chapter_text(chapter.rr_url)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
+
+    # Update word count
+    chapter.word_count = len(text.split())
+    chapter.fetched_at = datetime.now(timezone.utc)
+    db.commit()
+
+    import asyncio
+
+    # Gather all DB data we need BEFORE launching background tasks
+    # (the DB session will be closed when the request returns)
+    next_chapters = (
+        db.query(Chapter)
+        .filter(Chapter.novel_id == chapter.novel_id, Chapter.order > chapter.order)
+        .order_by(Chapter.order)
+        .limit(3)
+        .all()
+    )
+    prev_ch = (
+        db.query(Chapter)
+        .filter(Chapter.novel_id == chapter.novel_id, Chapter.order == chapter.order - 1)
+        .first()
+    )
+
+    # Pre-compute the set of chapter IDs to keep
+    keep_ids = {chapter_id}
+    if prev_ch:
+        keep_ids.add(prev_ch.id)
+    for nch in next_chapters:
+        keep_ids.add(nch.id)
+
+    # Extract prefetch target info
+    prefetch_id = next_chapters[0].id if next_chapters else None
+    prefetch_url = next_chapters[0].rr_url if next_chapters else None
+
+    async def _after_synthesis():
+        """Prefetch next chapter and cleanup old files after synthesis."""
+        if prefetch_id and prefetch_url:
+            try:
+                nch_text = await scrape_chapter_text(prefetch_url)
+                await prefetch_next_chapter(prefetch_id, nch_text, voice, 1.0)
+            except Exception:
+                pass
+        cleanup_temp_files(keep_ids)
+
+    if playback_mode == "instant":
+        async def _run_streaming():
+            await synthesize_chapter_streaming(chapter_id, text, voice, 1.0)
+            await _after_synthesis()
+        asyncio.create_task(_run_streaming())
+        return {"ready": False, "duration_seconds": None, "mode": "instant"}
+    else:
+        async def _run_full():
+            await synthesize_chapter_to_file(chapter_id, text, voice, 1.0)
+            await _after_synthesis()
+        asyncio.create_task(_run_full())
+        return {"ready": False, "duration_seconds": None, "mode": "full"}
+
+
+@router.get("/chapters/{chapter_id}/segments")
+async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
+    """
+    Get the current streaming synthesis state for a chapter.
+    Scans the filesystem for segment files to avoid GIL starvation issues.
+    """
+    import soundfile as _sf
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    # Check full file status
+    full_status = get_chapter_status(chapter_id)
+    file_ready = full_status["ready"]
+
+    # Scan disk for segment files: chapter_{id}_seg_0.wav, chapter_{id}_seg_1.wav, ...
+    seg_index = 0
+    segment_durations = []
+    total_duration = 0.0
+    while True:
+        seg_path = _segment_path(chapter_id, seg_index)
+        if not seg_path.exists():
+            break
+        try:
+            info = _sf.info(str(seg_path))
+            segment_durations.append(info.duration)
+            total_duration += info.duration
+        except Exception:
+            segment_durations.append(0.0)
+        seg_index += 1
+
+    # Check if streaming is still in progress via in-memory state
+    streaming = get_streaming_state(chapter_id)
+    synthesis_complete = file_ready  # full file means definitely complete
+    if streaming:
+        synthesis_complete = streaming.get("complete", False)
+
+    # If no segments found but full file exists, report file-only
+    if seg_index == 0 and file_ready:
+        return {
+            "segment_count": 0,
+            "segment_durations": [],
+            "complete": True,
+            "total_duration": full_status["duration_seconds"] or 0.0,
+            "file_ready": True,
+        }
+
+    return {
+        "segment_count": seg_index,
+        "segment_durations": segment_durations,
+        "complete": synthesis_complete,
+        "total_duration": total_duration,
+        "file_ready": file_ready,
+    }
+
+
+@router.get("/chapters/{chapter_id}/segments/{seg_index}")
+async def get_segment_audio(chapter_id: int, seg_index: int, db: Session = Depends(get_db)):
+    """
+    Serve a single audio segment WAV file.
+    """
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    path = _segment_path(chapter_id, seg_index)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Segment not ready")
+
+    return FileResponse(
+        path=str(path),
+        media_type="audio/wav",
+        filename=f"chapter_{chapter_id}_seg_{seg_index}.wav",
+    )

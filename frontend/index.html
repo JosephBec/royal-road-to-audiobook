@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Royal Road TTS</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Top Bar -->
+    <header id="top-bar">
+        <h1 id="btn-home" style="cursor:pointer;">Royal Road TTS</h1>
+        <div class="top-actions">
+            <button id="btn-theme-toggle" class="icon-btn" title="Toggle theme">🌙</button>
+            <button id="btn-settings" class="icon-btn" title="Settings">⚙️</button>
+            <button id="btn-add-novel" class="primary-btn">+ Add Novel</button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="app">
+        <!-- Library View -->
+        <section id="library-view" class="view active">
+            <div id="novel-grid" class="novel-grid">
+                <!-- Novel cards injected here -->
+            </div>
+            <div id="library-empty" class="empty-state" style="display:none;">
+                <p>Your library is empty.</p>
+                <p>Click <strong>+ Add Novel</strong> to get started.</p>
+            </div>
+        </section>
+
+        <!-- Novel Detail View -->
+        <section id="novel-view" class="view">
+            <div class="novel-header">
+                <button id="btn-back" class="icon-btn">← Back</button>
+                <div class="novel-info">
+                    <img id="novel-cover" src="" alt="" class="novel-detail-cover">
+                    <div>
+                        <h2 id="novel-title"></h2>
+                        <p id="novel-author" class="subtitle"></p>
+                        <p id="novel-stats" class="subtitle"></p>
+                    </div>
+                </div>
+                <button id="btn-refresh" class="secondary-btn">↻ Refresh</button>
+            </div>
+            <div id="novel-description" class="novel-description"></div>
+            <div id="chapter-list" class="chapter-list">
+                <!-- Chapter rows injected here -->
+            </div>
+            <div id="chapter-pagination" class="pagination"></div>
+        </section>
+    </main>
+
+    <!-- Mini Player (persistent bottom bar) -->
+    <footer id="mini-player" style="display:none;">
+        <div class="player-top-row">
+            <div class="player-info">
+                <span id="player-novel-title" class="player-novel"></span>
+                <span class="player-info-sep">—</span>
+                <span id="player-chapter-title" class="player-chapter"></span>
+            </div>
+            <div class="player-status">
+                <span id="player-loading" class="loading-indicator" style="display:none;">Synthesizing...</span>
+            </div>
+            <button id="btn-player-settings" class="ctrl-btn" title="Settings">⚙️</button>
+        </div>
+        <div class="player-scrub">
+            <span id="player-current-time">0:00</span>
+            <input type="range" id="player-scrubbar" min="0" max="100" value="0" step="0.1">
+            <span id="player-duration">--:--</span>
+        </div>
+        <div class="player-controls">
+            <button id="btn-prev-chapter" class="ctrl-btn chapter-nav-btn" title="Previous Chapter">Prev</button>
+            <button id="btn-back-15" class="ctrl-btn" title="Back 15s">-15</button>
+            <button id="btn-play-pause" class="ctrl-btn play-btn" title="Play">▶</button>
+            <button id="btn-fwd-30" class="ctrl-btn" title="Forward 30s">+30</button>
+            <button id="btn-next-chapter" class="ctrl-btn chapter-nav-btn" title="Next Chapter">Next</button>
+        </div>
+    </footer>
+
+    <!-- Add Novel Modal -->
+    <div id="modal-add" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Add Royal Road Novel</h3>
+            <p>Paste a Royal Road fiction URL:</p>
+            <input type="text" id="input-novel-url" placeholder="https://www.royalroad.com/fiction/..." autocomplete="off">
+            <div id="add-error" class="error-msg" style="display:none;"></div>
+            <div class="modal-actions">
+                <button id="btn-add-cancel" class="secondary-btn">Cancel</button>
+                <button id="btn-add-confirm" class="primary-btn">Add Novel</button>
+            </div>
+            <div id="add-loading" class="loading-indicator" style="display:none;">Scraping Royal Road...</div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="modal-settings" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Settings</h3>
+            <div class="setting-row">
+                <label for="setting-voice">Voice</label>
+                <select id="setting-voice"></select>
+            </div>
+            <div class="setting-row">
+                <label for="setting-speed">Speed</label>
+                <div class="speed-control">
+                    <button id="speed-down" class="small-btn">−</button>
+                    <span id="speed-value">1.0x</span>
+                    <button id="speed-up" class="small-btn">+</button>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label for="setting-mode">Playback Mode</label>
+                <select id="setting-mode">
+                    <option value="full">Full Chapter (wait for complete file)</option>
+                    <option value="instant">Instant Play (stream segments)</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="setting-autoplay">Auto-play Next Chapter</label>
+                <input type="checkbox" id="setting-autoplay" checked>
+            </div>
+            <div class="setting-row">
+                <label for="setting-theme">Default Theme</label>
+                <select id="setting-theme">
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="setting-chapter-sort">Chapter Sort Order</label>
+                <select id="setting-chapter-sort">
+                    <option value="asc">Ascending (1, 2, 3...)</option>
+                    <option value="desc">Descending (newest first)</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="btn-settings-close" class="primary-btn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast" style="display:none;"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

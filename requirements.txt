@@ -1,0 +1,14 @@
+fastapi[standard]==0.115.0
+uvicorn[standard]==0.30.0
+sqlalchemy==2.0.32
+httpx==0.27.0
+beautifulsoup4==4.12.3
+lxml==5.2.2
+kokoro==0.8.4
+numpy==1.26.4
+soundfile==0.12.1
+pyyaml==6.0.2
+torch>=2.1.0
+tqdm==4.66.5
+pystray==0.19.5
+Pillow==10.4.0

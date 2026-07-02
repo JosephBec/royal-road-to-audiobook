@@ -1,0 +1,32 @@
+voices:
+  - id: af_heart
+    label: "Heart (Female, American)"
+  - id: af_bella
+    label: "Bella (Female, American)"
+  - id: af_nicole
+    label: "Nicole (Female, American)"
+  - id: af_nova
+    label: "Nova (Female, American)"
+  - id: af_sky
+    label: "Sky (Female, American)"
+  - id: am_adam
+    label: "Adam (Male, American)"
+  - id: am_echo
+    label: "Echo (Male, American)"
+  - id: am_eric
+    label: "Eric (Male, American)"
+  - id: am_michael
+    label: "Michael (Male, American)"
+  - id: am_puck
+    label: "Puck (Male, American)"
+  - id: bf_emma
+    label: "Emma (Female, British)"
+  - id: bf_lily
+    label: "Lily (Female, British)"
+  - id: bm_daniel
+    label: "Daniel (Male, British)"
+  - id: bm_george
+    label: "George (Male, British)"
+
+default_voice: af_heart
+default_speed: 1.0
