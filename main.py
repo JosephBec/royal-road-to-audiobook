@@ -53,15 +53,15 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Applying audio cache retention policy...")
     _retention_cleanup()
-    logger.info("Royal Road TTS server ready.")
+    logger.info("Novel TTS server ready.")
     yield
     logger.info("Shutting down — applying audio cache retention policy...")
     _retention_cleanup()
 
 
 app = FastAPI(
-    title="Royal Road TTS",
-    description="Listen to Royal Road web novels with AI-generated narration",
+    title="Novel TTS",
+    description="Listen to web novels with AI-generated narration",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -140,7 +140,7 @@ def main():
 
     print(f"""
 ========================================
-  Royal Road TTS Server
+  Novel TTS Server
   Powered by Kokoro TTS + CUDA GPU
   v1.0.0
 ========================================

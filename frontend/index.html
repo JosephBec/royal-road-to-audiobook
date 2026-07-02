@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Royal Road TTS</title>
+    <title>Novel TTS</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <link rel="stylesheet" href="/static/style.css?v=__V__">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -11,7 +13,7 @@
 <body>
     <!-- Top Bar -->
     <header id="top-bar">
-        <h1 id="btn-home" style="cursor:pointer;">Royal Road TTS</h1>
+        <h1 id="btn-home" style="cursor:pointer;"><img src="/static/favicon.svg" alt="" class="app-logo">Novel TTS</h1>
         <div class="top-actions">
             <button id="btn-theme-toggle" class="icon-btn" title="Toggle theme">🌙</button>
             <button id="btn-settings" class="icon-btn" title="Settings">⚙️</button>
@@ -54,6 +56,7 @@
                         <h2 id="novel-title"></h2>
                         <p id="novel-author" class="subtitle"></p>
                         <p id="novel-stats" class="subtitle"></p>
+                        <p id="novel-source" class="subtitle"></p>
                     </div>
                 </div>
                 <div class="novel-header-actions">
@@ -101,9 +104,9 @@
     <!-- Add Novel Modal -->
     <div id="modal-add" class="modal" style="display:none;">
         <div class="modal-content">
-            <h3>Add Royal Road Novel</h3>
-            <p>Paste a Royal Road fiction URL:</p>
-            <input type="text" id="input-novel-url" placeholder="https://www.royalroad.com/fiction/..." autocomplete="off">
+            <h3>Add Novel</h3>
+            <p>Paste a novel URL (Royal Road or Ranobes):</p>
+            <input type="text" id="input-novel-url" placeholder="https://www.royalroad.com/fiction/... or https://ranobes.net/novels/..." autocomplete="off">
             <div id="add-error" class="error-msg" style="display:none;"></div>
             <div class="modal-actions">
                 <button id="btn-add-cancel" class="secondary-btn">Cancel</button>

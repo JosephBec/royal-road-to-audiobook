@@ -306,6 +306,11 @@ async function openNovel(novelId, opts = {}) {
 
     updateFavoriteButton();
 
+    // Source site link (opens the scraped page in a new tab)
+    document.getElementById('novel-source').innerHTML = novel.source
+        ? `From <a href="${escapeHtml(novel.rr_url)}" target="_blank" rel="noopener">${escapeHtml(novel.source)} ↗</a>`
+        : '';
+
     // Auto-refresh chapters on open — favorites only; non-favorites are
     // binge reads, refreshed manually via the ↻ button
     if (novel.favorite) {
@@ -1013,7 +1018,7 @@ function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
     const title = state.playback.chapter?.title || 'Chapter';
-    const novel = state.playback.novel?.title || 'Royal Road TTS';
+    const novel = state.playback.novel?.title || 'Novel TTS';
 
     navigator.mediaSession.metadata = new MediaMetadata({
         title: title,

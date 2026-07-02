@@ -1,6 +1,6 @@
-# Royal Road TTS
+# Novel TTS
 
-A self-hosted web app that lets you listen to [Royal Road](https://www.royalroad.com) web novels with AI-generated narration powered by [Kokoro TTS](https://github.com/hexgrad/kokoro).
+A self-hosted web app that lets you listen to web novels — [Royal Road](https://www.royalroad.com), [Ranobes](https://ranobes.net), or any site you add a scraper for — with AI-generated narration powered by [Kokoro TTS](https://github.com/hexgrad/kokoro).
 
 Add novels by URL, browse chapters, and listen with real-time audio synthesis on your GPU. Progress is tracked server-side — pick up where you left off from any device on your network.
 
@@ -8,7 +8,7 @@ Add novels by URL, browse chapters, and listen with real-time audio synthesis on
 
 ## Features
 
-- **Royal Road integration** — Add novels by URL, automatically scrapes metadata, cover art, and chapter lists
+- **Royal Road + Ranobes integration** — Add novels by URL, automatically scrapes metadata, cover art, and chapter lists
 - **Pluggable scrapers** — Drop a new `.py` file in `scrapers/` to support additional sites (see below)
 - **Per-novel settings** — Override voice, speed, auto-play, and chapter sort order for individual novels
 - **Favorites** — Star the novels you follow: auto-refreshed and pre-downloaded on every visit; bookmark `/#favorites` to open straight into them
@@ -198,7 +198,8 @@ royal-road-to-audiobook/
 ├── scrapers/
 │   ├── __init__.py      # Scraper registry (auto-discovers site modules)
 │   ├── base.py          # BaseScraper interface + shared HTTP helpers
-│   └── royalroad.py     # Royal Road scraper
+│   ├── royalroad.py     # Royal Road scraper
+│   └── ranobes.py       # Ranobes (ranobes.net) scraper
 ├── tts.py               # Kokoro TTS wrapper + streaming + temp files
 ├── routers/
 │   ├── novels.py        # Novel CRUD + refresh

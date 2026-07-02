@@ -48,6 +48,7 @@ class NovelResponse(BaseModel):
     progress_chapter: int | None = None
     progress_chapter_title: str | None = None
     progress_updated_at: str | None = None
+    source: str | None = None
     favorite: bool = False
     sort_order: int | None = None
     settings: dict | None = None
@@ -60,7 +61,9 @@ class NovelResponse(BaseModel):
 def _novel_settings_payload(novel: Novel, db: Session) -> dict:
     """Override values plus their resolution against global settings."""
     settings = db.query(Settings).first()
+    scraper = get_scraper_for_url(novel.rr_url)
     return {
+        "source": scraper.name if scraper else None,
         "favorite": bool(novel.favorite),
         "sort_order": novel.sort_order,
         "settings": {

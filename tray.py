@@ -23,7 +23,7 @@ import pystray
 # ── Configuration ──
 HOST = "0.0.0.0"
 PORT = 8000
-APP_NAME = "Royal Road TTS"
+APP_NAME = "Novel TTS"
 URL = f"http://localhost:{PORT}"
 
 # Path to this project
