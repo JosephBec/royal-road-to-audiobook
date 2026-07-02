@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db, Novel, Chapter, Settings, Progress
+from database import get_db, Novel, Chapter, Settings, Progress, effective_settings
 from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
@@ -71,7 +71,7 @@ async def list_chapters(
         raise HTTPException(status_code=404, detail="Novel not found")
 
     settings = db.query(Settings).first()
-    sort_order = (settings.chapter_sort if settings else "asc")
+    sort_order = effective_settings(novel, settings)["chapter_sort"]
 
     total = db.query(Chapter).filter(Chapter.novel_id == novel_id).count()
     order_col = Chapter.order.asc() if sort_order == "asc" else Chapter.order.desc()
@@ -121,8 +121,9 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
+    novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
     settings = db.query(Settings).first()
-    voice = settings.voice if settings else "af_heart"
+    voice = effective_settings(novel, settings)["voice"]
 
     # Check if already synthesized
     existing_path = temp_path_for_chapter(chapter_id)
@@ -186,8 +187,9 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     if status["ready"]:
         return {**status, "mode": "full"}
 
+    novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
     settings = db.query(Settings).first()
-    voice = settings.voice if settings else "af_heart"
+    voice = effective_settings(novel, settings)["voice"]
     playback_mode = settings.playback_mode if settings else "full"
 
     # Scrape text

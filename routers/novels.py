@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db, Novel, Chapter, Progress
+from database import get_db, Novel, Chapter, Progress, Settings, effective_settings
 from scrapers import get_scraper_for_url, supported_sites
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,13 @@ router = APIRouter(prefix="/api/novels", tags=["novels"])
 
 class AddNovelRequest(BaseModel):
     url: str
+
+
+class NovelSettingsRequest(BaseModel):
+    voice: str | None = None
+    speed: float | None = None
+    auto_play: bool | None = None
+    chapter_sort: str | None = None
 
 
 class NovelResponse(BaseModel):
@@ -34,9 +41,25 @@ class NovelResponse(BaseModel):
     created_at: str
     progress_chapter: int | None = None
     progress_chapter_title: str | None = None
+    settings: dict | None = None
+    effective_settings: dict | None = None
 
     class Config:
         from_attributes = True
+
+
+def _novel_settings_payload(novel: Novel, db: Session) -> dict:
+    """Override values plus their resolution against global settings."""
+    settings = db.query(Settings).first()
+    return {
+        "settings": {
+            "voice": novel.voice,
+            "speed": novel.speed,
+            "auto_play": novel.auto_play,
+            "chapter_sort": novel.chapter_sort,
+        },
+        "effective_settings": effective_settings(novel, settings),
+    }
 
 
 @router.get("", response_model=list[NovelResponse])
@@ -65,6 +88,7 @@ async def list_novels(db: Session = Depends(get_db)):
             created_at=novel.created_at.isoformat() if novel.created_at else "",
             progress_chapter=chapter_order,
             progress_chapter_title=chapter_title,
+            **_novel_settings_payload(novel, db),
         ))
     return results
 
@@ -144,7 +168,35 @@ async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
         created_at=novel.created_at.isoformat() if novel.created_at else "",
         progress_chapter=None,
         progress_chapter_title=None,
+        **_novel_settings_payload(novel, db),
     )
+
+
+@router.patch("/{novel_id}/settings")
+async def update_novel_settings(
+    novel_id: int,
+    req: NovelSettingsRequest,
+    db: Session = Depends(get_db),
+):
+    """Set or clear per-novel overrides. Explicit null clears (inherits global)."""
+    novel = db.query(Novel).filter(Novel.id == novel_id).first()
+    if not novel:
+        raise HTTPException(status_code=404, detail="Novel not found")
+
+    provided = req.model_fields_set
+    if "speed" in provided and req.speed is not None and not (0.5 <= req.speed <= 2.0):
+        raise HTTPException(status_code=400, detail="Speed must be between 0.5 and 2.0")
+    if "chapter_sort" in provided and req.chapter_sort not in (None, "asc", "desc"):
+        raise HTTPException(status_code=400, detail="Chapter sort must be 'asc' or 'desc'")
+
+    for field in ("voice", "speed", "auto_play", "chapter_sort"):
+        if field in provided:
+            setattr(novel, field, getattr(req, field))
+    db.commit()
+
+    logger.info("Novel %d settings updated: %s", novel_id,
+                {f: getattr(novel, f) for f in ("voice", "speed", "auto_play", "chapter_sort")})
+    return _novel_settings_payload(novel, db)
 
 
 @router.delete("/{novel_id}", status_code=204)
