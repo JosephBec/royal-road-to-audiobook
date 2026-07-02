@@ -23,6 +23,18 @@
     <main id="app">
         <!-- Library View -->
         <section id="library-view" class="view active">
+            <div id="library-toolbar">
+                <div class="lib-tabs">
+                    <button id="tab-all" class="lib-tab active">All</button>
+                    <button id="tab-favorites" class="lib-tab">⭐ Favorites</button>
+                </div>
+                <select id="library-sort" title="Sort library">
+                    <option value="listened">Recently Listened</option>
+                    <option value="added">Recently Added</option>
+                    <option value="title">Title A–Z</option>
+                    <option value="custom">Custom Order</option>
+                </select>
+            </div>
             <div id="novel-grid" class="novel-grid">
                 <!-- Novel cards injected here -->
             </div>
@@ -45,6 +57,7 @@
                     </div>
                 </div>
                 <div class="novel-header-actions">
+                    <button id="btn-favorite" class="secondary-btn" title="Favorite">☆</button>
                     <button id="btn-novel-settings" class="secondary-btn">⚙ Novel</button>
                     <button id="btn-refresh" class="secondary-btn">↻ Refresh</button>
                 </div>

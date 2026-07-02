@@ -8,6 +8,11 @@
 const state = {
     novels: [],
     currentNovel: null,
+    // Library organization
+    libraryTab: location.hash === '#favorites' ? 'favorites' : 'all',
+    librarySort: localStorage.getItem('librarySort') || 'added',
+    _dragging: false,
+    _suppressClick: false,
     chapters: [],
     chapterPage: 1,
     chapterTotalPages: 1,
@@ -34,6 +39,10 @@ const state = {
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
+    // Kick the server-side favorites sync (new chapters + pre-downloads);
+    // fire-and-forget, the server enforces its own cooldown
+    api('POST', '/api/library/refresh-favorites').catch(() => {});
+
     await loadSettings();
     applyTheme(state.settings.theme);
     await loadVoices();
@@ -42,6 +51,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupAudioEvents();
     applyPlaybackRate();
     updateAddNovelVisibility();
+    applyLibraryTab();
+    document.getElementById('library-sort').value = state.librarySort;
+});
+
+window.addEventListener('hashchange', () => {
+    state.libraryTab = location.hash === '#favorites' ? 'favorites' : 'all';
+    applyLibraryTab();
 });
 
 // ===== Theme =====
@@ -112,19 +128,55 @@ async function loadLibrary() {
     }
 }
 
+function setLibraryTab(tab) {
+    state.libraryTab = tab;
+    history.replaceState(null, '', tab === 'favorites' ? '#favorites' : location.pathname);
+    applyLibraryTab();
+}
+
+function applyLibraryTab() {
+    document.getElementById('tab-all').classList.toggle('active', state.libraryTab === 'all');
+    document.getElementById('tab-favorites').classList.toggle('active', state.libraryTab === 'favorites');
+    renderLibrary();
+}
+
+function sortedNovels() {
+    let list = state.novels.slice();
+    if (state.libraryTab === 'favorites') {
+        list = list.filter(n => n.favorite);
+    }
+    const comparators = {
+        listened: (a, b) => (b.progress_updated_at || '').localeCompare(a.progress_updated_at || ''),
+        added: (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+        title: (a, b) => a.title.localeCompare(b.title),
+        custom: (a, b) => (a.sort_order ?? Infinity) - (b.sort_order ?? Infinity),
+    };
+    list.sort(comparators[state.librarySort] || comparators.added);
+    if (state.libraryTab === 'all') {
+        // Favorites group first; sort() is stable so order within groups holds
+        list.sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
+    }
+    return list;
+}
+
 function renderLibrary() {
     const grid = document.getElementById('novel-grid');
     const empty = document.getElementById('library-empty');
+    const novels = sortedNovels();
 
-    if (state.novels.length === 0) {
+    if (novels.length === 0) {
         grid.innerHTML = '';
+        empty.innerHTML = state.libraryTab === 'favorites'
+            ? '<p>No favorites yet.</p><p>Tap the ☆ on a novel to add it here.</p>'
+            : '<p>Your library is empty.</p><p>Click <strong>+ Add Novel</strong> to get started.</p>';
         empty.style.display = 'block';
         return;
     }
 
     empty.style.display = 'none';
-    grid.innerHTML = state.novels.map(novel => `
+    grid.innerHTML = novels.map(novel => `
         <div class="novel-card" data-id="${novel.id}">
+            <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
             <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             ${novel.cover_url
                 ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy">`
@@ -144,11 +196,21 @@ function renderLibrary() {
         </div>
     `).join('');
 
-    // Card click → open novel
+    // Card click → open novel (suppressed right after a drag)
     grid.querySelectorAll('.novel-card').forEach(card => {
         card.addEventListener('click', (e) => {
-            if (e.target.closest('.novel-card-delete')) return;
+            if (state._suppressClick) return;
+            if (e.target.closest('.novel-card-delete') || e.target.closest('.novel-card-fav')) return;
             openNovel(parseInt(card.dataset.id));
+        });
+        setupCardDrag(card);
+    });
+
+    // Favorite stars
+    grid.querySelectorAll('.novel-card-fav').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleFavorite(parseInt(btn.dataset.id));
         });
     });
 
@@ -242,16 +304,21 @@ async function openNovel(novelId, opts = {}) {
     const descEl = document.getElementById('novel-description');
     descEl.textContent = novel.description || '';
 
-    // Auto-refresh chapters from Royal Road
-    try {
-        const result = await api('POST', `/api/novels/${novel.id}/refresh`);
-        if (result.new_chapters > 0) {
-            showToast(`${result.new_chapters} new chapter${result.new_chapters > 1 ? 's' : ''} found!`);
-            novel.total_chapters = result.total_chapters;
-            document.getElementById('novel-stats').textContent = `${result.total_chapters} chapters`;
+    updateFavoriteButton();
+
+    // Auto-refresh chapters on open — favorites only; non-favorites are
+    // binge reads, refreshed manually via the ↻ button
+    if (novel.favorite) {
+        try {
+            const result = await api('POST', `/api/novels/${novel.id}/refresh`);
+            if (result.new_chapters > 0) {
+                showToast(`${result.new_chapters} new chapter${result.new_chapters > 1 ? 's' : ''} found!`);
+                novel.total_chapters = result.total_chapters;
+                document.getElementById('novel-stats').textContent = `${result.total_chapters} chapters`;
+            }
+        } catch (e) {
+            // Non-critical, just load existing chapters
         }
-    } catch (e) {
-        // Non-critical, just load existing chapters
     }
 
     await loadChapters();
@@ -1071,6 +1138,97 @@ function closeSettings() {
     document.getElementById('modal-settings').style.display = 'none';
 }
 
+// ===== Favorites =====
+async function toggleFavorite(novelId) {
+    const novel = state.novels.find(n => n.id === novelId);
+    if (!novel) return;
+    try {
+        const result = await api('PATCH', `/api/novels/${novelId}/settings`, { favorite: !novel.favorite });
+        novel.favorite = result.favorite;
+        renderLibrary();
+        updateFavoriteButton();
+        showToast(novel.favorite ? '⭐ Added to favorites' : 'Removed from favorites');
+    } catch (e) {
+        showToast('Failed: ' + e.message);
+    }
+}
+
+function updateFavoriteButton() {
+    const btn = document.getElementById('btn-favorite');
+    const fav = !!state.currentNovel?.favorite;
+    btn.textContent = fav ? '⭐' : '☆';
+    btn.title = fav ? 'Unfavorite' : 'Favorite';
+}
+
+// ===== Drag-to-reorder (long-press, works with touch) =====
+function setupCardDrag(card) {
+    let pressTimer = null;
+    let dragging = false;
+    let startX = 0, startY = 0;
+
+    card.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) return;
+        startX = e.clientX;
+        startY = e.clientY;
+        pressTimer = setTimeout(() => {
+            dragging = true;
+            state._dragging = true;
+            card.classList.add('dragging');
+            try { card.setPointerCapture(e.pointerId); } catch (err) {}
+        }, 400);
+    });
+
+    card.addEventListener('pointermove', (e) => {
+        if (!dragging) {
+            // Movement before the long-press fires = scrolling, not dragging
+            if (pressTimer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+            return;
+        }
+        const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.novel-card');
+        if (!target || target === card) return;
+        const cards = [...document.querySelectorAll('#novel-grid .novel-card')];
+        if (cards.indexOf(card) < cards.indexOf(target)) {
+            target.after(card);
+        } else {
+            target.before(card);
+        }
+    });
+
+    const finish = () => {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+        if (!dragging) return;
+        dragging = false;
+        state._dragging = false;
+        card.classList.remove('dragging');
+        state._suppressClick = true;
+        setTimeout(() => { state._suppressClick = false; }, 150);
+        saveCustomOrder();
+    };
+    card.addEventListener('pointerup', finish);
+    card.addEventListener('pointercancel', finish);
+}
+
+async function saveCustomOrder() {
+    const ids = [...document.querySelectorAll('#novel-grid .novel-card')].map(c => parseInt(c.dataset.id));
+    try {
+        await api('PUT', '/api/novels/order', { ids });
+        ids.forEach((id, i) => {
+            const n = state.novels.find(nv => nv.id === id);
+            if (n) n.sort_order = i;
+        });
+        state.librarySort = 'custom';
+        localStorage.setItem('librarySort', 'custom');
+        document.getElementById('library-sort').value = 'custom';
+        showToast('Custom order saved');
+    } catch (e) {
+        showToast('Failed to save order: ' + e.message);
+    }
+}
+
 // ===== Per-Novel Settings =====
 function openNovelSettings() {
     const novel = state.currentNovel;
@@ -1106,6 +1264,7 @@ async function updateNovelSetting(field, value) {
         const result = await api('PATCH', `/api/novels/${novel.id}/settings`, { [field]: value });
         novel.settings = result.settings;
         novel.effective_settings = result.effective_settings;
+        novel.favorite = result.favorite;
         // Keep the playing novel's object in sync so playbackSetting() sees it
         if (state.playback.novel?.id === novel.id) {
             state.playback.novel.settings = result.settings;
@@ -1157,9 +1316,26 @@ function setupEventListeners() {
         if (e.target === e.currentTarget) closeSettings();
     });
 
+    // Library tabs + sort
+    document.getElementById('tab-all').addEventListener('click', () => setLibraryTab('all'));
+    document.getElementById('tab-favorites').addEventListener('click', () => setLibraryTab('favorites'));
+    document.getElementById('library-sort').addEventListener('change', (e) => {
+        state.librarySort = e.target.value;
+        localStorage.setItem('librarySort', state.librarySort);
+        renderLibrary();
+    });
+
+    // Block page scroll while a card is being dragged (iOS)
+    document.addEventListener('touchmove', (e) => {
+        if (state._dragging) e.preventDefault();
+    }, { passive: false });
+
     // Novel detail
     document.getElementById('btn-back').addEventListener('click', closeNovel);
     document.getElementById('btn-refresh').addEventListener('click', refreshNovel);
+    document.getElementById('btn-favorite').addEventListener('click', () => {
+        if (state.currentNovel) toggleFavorite(state.currentNovel.id);
+    });
 
     // Per-novel settings
     document.getElementById('btn-novel-settings').addEventListener('click', openNovelSettings);

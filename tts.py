@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -118,21 +119,36 @@ def _all_temp_audio_files():
     yield from TEMP_DIR.glob("chapter_*.aac")
 
 
-def cleanup_temp_files(keep_ids: set[int]):
-    """Remove temp audio files except for the given chapter IDs."""
+# How long non-favorite prefetched audio survives (binge cache): 2 days
+RETENTION_SECONDS = 2 * 24 * 3600
+
+
+def cleanup_temp_files(keep_ids: set[int], expiring_ids: set[int] | None = None):
+    """
+    Remove temp audio files. `keep_ids` are kept unconditionally;
+    `expiring_ids` are kept while the file is younger than RETENTION_SECONDS;
+    everything else is deleted.
+    """
+    expiring_ids = expiring_ids or set()
+    cutoff = time.time() - RETENTION_SECONDS
     for f in _all_temp_audio_files():
         try:
             # Parse chapter id from "chapter_123.wav" or "chapter_123_seg_0.wav"
-            parts = f.stem.split("_")
-            ch_id = int(parts[1])
-            if ch_id not in keep_ids:
-                f.unlink()
-                logger.debug("Deleted temp file: %s", f.name)
+            ch_id = int(f.stem.split("_")[1])
         except (ValueError, IndexError):
+            continue
+        if ch_id in keep_ids:
+            continue
+        try:
+            if ch_id in expiring_ids and f.stat().st_mtime >= cutoff:
+                continue
+            f.unlink()
+            logger.debug("Deleted temp file: %s", f.name)
+        except OSError:
             pass
     # Clean streaming state for removed chapters
     for ch_id in list(_streaming_state.keys()):
-        if ch_id not in keep_ids:
+        if ch_id not in keep_ids and ch_id not in expiring_ids:
             _streaming_state.pop(ch_id, None)
 
 
@@ -336,29 +352,23 @@ def get_chapter_status(chapter_id: int) -> dict:
     return {"ready": False, "duration_seconds": None}
 
 
-# Prefetch state
-_prefetch_task: Optional[asyncio.Task] = None
+# ===== Interactive-synthesis tracking =====
+# Background pipelines (favorites sync, playback prefetch) yield to synthesis
+# the user is actively waiting on.
+
+_interactive_count = 0
 
 
-async def prefetch_next_chapter(
-    chapter_id: int,
-    text: str,
-    voice: str = "af_heart",
-    speed: float = 1.0,
-):
-    """Start prefetching the next chapter in the background."""
-    global _prefetch_task
+@contextmanager
+def interactive_synthesis():
+    """Mark a synthesis the user is waiting on (playback request)."""
+    global _interactive_count
+    _interactive_count += 1
+    try:
+        yield
+    finally:
+        _interactive_count -= 1
 
-    # Cancel any existing prefetch
-    if _prefetch_task and not _prefetch_task.done():
-        _prefetch_task.cancel()
 
-    async def _do_prefetch():
-        try:
-            await synthesize_chapter_to_file(chapter_id, text, voice, speed)
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Prefetch error for chapter %d: %s", chapter_id, e)
-
-    _prefetch_task = asyncio.create_task(_do_prefetch())
+def interactive_busy() -> bool:
+    return _interactive_count > 0

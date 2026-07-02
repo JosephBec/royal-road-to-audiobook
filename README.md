@@ -11,6 +11,8 @@ Add novels by URL, browse chapters, and listen with real-time audio synthesis on
 - **Royal Road integration** — Add novels by URL, automatically scrapes metadata, cover art, and chapter lists
 - **Pluggable scrapers** — Drop a new `.py` file in `scrapers/` to support additional sites (see below)
 - **Per-novel settings** — Override voice, speed, auto-play, and chapter sort order for individual novels
+- **Favorites** — Star the novels you follow: auto-refreshed and pre-downloaded on every visit; bookmark `/#favorites` to open straight into them
+- **Library organization** — All/Favorites tabs, sort by recently listened/added/title, or long-press drag cards into a custom order
 - **Resume** — One-click resume from the novel page or the library card badge
 - **GPU-accelerated TTS** — Kokoro-82M with CUDA for fast synthesis (~30x realtime on RTX 2070)
 - **Streaming playback** — Start listening within seconds (Mode A) or wait for full synthesis (Mode B)
@@ -121,6 +123,25 @@ On a novel's detail page, click **⚙ Novel** to override voice, speed, auto-pla
 chapter sort order for that novel only. Each control has a "Default" option that
 falls back to the global setting; overrides apply immediately, including to the
 chapter currently playing.
+
+### Favorites
+
+Star a novel (☆ on its card or detail page) to mark it as actively followed:
+
+- On every site visit the server re-crawls favorites for new chapters and
+  pre-downloads the next 3 chapters from your current position (at most once
+  per 10 minutes; background work always yields to whatever you press play on).
+- Favorites' pre-downloaded audio is kept until you listen past it.
+  Non-favorites still pre-download 3 ahead while you're playing them, but that
+  cache expires after 2 days — tuned for binge reads.
+- Non-favorites are no longer auto-crawled when opened; use ↻ Refresh.
+- Bookmark `http://<server>:8000/#favorites` to open the Favorites tab directly.
+
+### Organizing the library
+
+Tabs switch between All and ⭐ Favorites (favorites always group first in All).
+The sort menu offers Recently Listened, Recently Added, Title A–Z, and Custom
+Order — long-press and drag any card to build the custom order.
 
 ### Resume
 
@@ -234,7 +255,9 @@ Place a shortcut to this file in your Windows Startup folder (`shell:startup`).
 | PUT | `/api/progress/{novel_id}` | Update reading progress |
 | GET | `/api/settings` | Get app settings |
 | PUT | `/api/settings` | Update app settings |
-| PATCH | `/api/novels/{id}/settings` | Set/clear per-novel overrides (null = inherit) |
+| PATCH | `/api/novels/{id}/settings` | Set/clear per-novel overrides + favorite flag |
+| PUT | `/api/novels/order` | Save manual card order |
+| POST | `/api/library/refresh-favorites` | Kick background favorites sync (10-min cooldown) |
 | GET | `/api/voices` | List available voices |
 | GET | `/` | Serve frontend |
 

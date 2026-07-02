@@ -28,6 +28,11 @@ class NovelSettingsRequest(BaseModel):
     speed: float | None = None
     auto_play: bool | None = None
     chapter_sort: str | None = None
+    favorite: bool | None = None
+
+
+class OrderRequest(BaseModel):
+    ids: list[int]
 
 
 class NovelResponse(BaseModel):
@@ -42,6 +47,9 @@ class NovelResponse(BaseModel):
     created_at: str
     progress_chapter: int | None = None
     progress_chapter_title: str | None = None
+    progress_updated_at: str | None = None
+    favorite: bool = False
+    sort_order: int | None = None
     settings: dict | None = None
     effective_settings: dict | None = None
 
@@ -53,6 +61,8 @@ def _novel_settings_payload(novel: Novel, db: Session) -> dict:
     """Override values plus their resolution against global settings."""
     settings = db.query(Settings).first()
     return {
+        "favorite": bool(novel.favorite),
+        "sort_order": novel.sort_order,
         "settings": {
             "voice": novel.voice,
             "speed": novel.speed,
@@ -89,9 +99,26 @@ async def list_novels(db: Session = Depends(get_db)):
             created_at=novel.created_at.isoformat() if novel.created_at else "",
             progress_chapter=chapter_order,
             progress_chapter_title=chapter_title,
+            progress_updated_at=(
+                progress.updated_at.isoformat()
+                if progress and progress.updated_at else None
+            ),
             **_novel_settings_payload(novel, db),
         ))
     return results
+
+
+@router.put("/order")
+async def set_novel_order(req: OrderRequest, db: Session = Depends(get_db)):
+    """Persist a manual card order (drag-to-reorder). Position = list index."""
+    novels = db.query(Novel).filter(Novel.id.in_(req.ids)).all()
+    by_id = {n.id: n for n in novels}
+    if len(by_id) != len(set(req.ids)):
+        raise HTTPException(status_code=400, detail="Unknown novel id in order list")
+    for pos, novel_id in enumerate(req.ids):
+        by_id[novel_id].sort_order = pos
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("", response_model=NovelResponse, status_code=201)
@@ -185,8 +212,11 @@ async def update_novel_settings(
     if "chapter_sort" in provided and req.chapter_sort not in (None, "asc", "desc"):
         raise HTTPException(status_code=400, detail="Chapter sort must be 'asc' or 'desc'")
 
+    if "favorite" in provided and req.favorite is None:
+        raise HTTPException(status_code=400, detail="favorite must be true or false")
+
     voice_changed = "voice" in provided and req.voice != novel.voice
-    for field in ("voice", "speed", "auto_play", "chapter_sort"):
+    for field in ("voice", "speed", "auto_play", "chapter_sort", "favorite"):
         if field in provided:
             setattr(novel, field, getattr(req, field))
     db.commit()
@@ -231,25 +261,8 @@ async def refresh_novel(novel_id: int, db: Session = Depends(get_db)):
         logger.error("Failed to refresh chapters: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to scrape: {e}")
 
-    existing_urls = {ch.rr_url for ch in novel.chapters}
-    new_count = 0
-
-    for ch_data in chapter_list:
-        if ch_data["rr_url"] not in existing_urls:
-            chapter = Chapter(
-                novel_id=novel.id,
-                rr_chapter_id=ch_data["rr_chapter_id"],
-                title=ch_data["title"],
-                order=ch_data["order"],
-                rr_url=ch_data["rr_url"],
-                published_at=ch_data.get("published_at"),
-            )
-            db.add(chapter)
-            new_count += 1
-
-    novel.total_chapters = len(chapter_list)
-    novel.last_refreshed = datetime.now(timezone.utc)
-    db.commit()
+    from library_sync import sync_chapter_list
+    new_count = sync_chapter_list(db, novel, chapter_list)
 
     logger.info("Refreshed %s: %d new chapters", novel.title, new_count)
     return {"new_chapters": new_count, "total_chapters": novel.total_chapters}

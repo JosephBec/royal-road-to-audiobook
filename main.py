@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 
-from database import init_db, SessionLocal, Progress
+from database import init_db, SessionLocal, retention_policy
 from routers import novels, chapters, progress, settings
 from tts import cleanup_temp_files
 
@@ -35,33 +35,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _progress_chapter_ids() -> set[int]:
-    """Chapter IDs with saved progress — their audio is kept for instant resume."""
+def _retention_cleanup():
+    """Apply the retention policy: in-progress chapters and favorites' next-3
+    kept forever, non-favorites' next-3 kept while fresh, the rest deleted."""
     db = SessionLocal()
     try:
-        return {
-            p.chapter_id
-            for p in db.query(Progress).filter(Progress.chapter_id.isnot(None)).all()
-        }
+        forever, expiring = retention_policy(db)
     finally:
         db.close()
+    cleanup_temp_files(forever, expiring)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup, clean temp files on startup/shutdown.
-
-    In-progress chapters (saved playback position) survive cleanup so a
-    half-finished chapter resumes instantly without re-synthesizing.
-    """
+    """Initialize database on startup, clean temp files on startup/shutdown."""
     logger.info("Initializing database...")
     init_db()
-    logger.info("Cleaning up temp audio files from previous session...")
-    cleanup_temp_files(_progress_chapter_ids())
+    logger.info("Applying audio cache retention policy...")
+    _retention_cleanup()
     logger.info("Royal Road TTS server ready.")
     yield
-    logger.info("Shutting down — cleaning up temp audio files...")
-    cleanup_temp_files(_progress_chapter_ids())
+    logger.info("Shutting down — applying audio cache retention policy...")
+    _retention_cleanup()
 
 
 app = FastAPI(
@@ -109,6 +104,13 @@ async def serve_index():
         (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
     ))
     return HTMLResponse(html.replace("__V__", str(version)))
+
+
+@app.post("/api/library/refresh-favorites")
+async def refresh_favorites():
+    """Kick the background favorites sync (called by the frontend on load)."""
+    import library_sync
+    return library_sync.start_refresh()
 
 
 @app.get("/api/voices")
