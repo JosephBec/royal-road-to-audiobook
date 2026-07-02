@@ -28,6 +28,9 @@ Add novels by URL, browse chapters, and listen with real-time audio synthesis on
 - **Python 3.10–3.12** (Python 3.13+ not supported by Kokoro)
 - **NVIDIA GPU** with CUDA support (CPU fallback available but slow)
 - **espeak-ng** — Required by Kokoro for phoneme generation
+- **ffmpeg** (optional) — Enables seamless Instant Play on iPhone via native
+  HLS. Without it, Instant Play falls back to clip-by-clip playback with
+  short gaps.
 
 ## Installation
 
@@ -106,7 +109,9 @@ Click the ⚙️ gear icon to configure:
 - **Speed** — 0.5x to 2.0x
 - **Playback Mode:**
   - **Wait for File** (default) — Synthesizes the full chapter before playing. Short wait (~30-60s for long chapters), but reliable background playback on mobile.
-  - **Instant Play** — Streams audio as it's synthesized. Starts playing within seconds but may have issues with mobile background playback.
+  - **Instant Play** — Streams audio as it's synthesized. Starts playing within
+    seconds. On Safari/iOS this uses a native HLS stream (seamless, works with
+    the screen locked); other browsers fall back to sequential clip playback.
 - **Auto-play** — Automatically advance to the next chapter when the current one ends
 - **Chapter Sort Order** — Oldest-first or newest-first chapter lists
 
@@ -221,6 +226,8 @@ Place a shortcut to this file in your Windows Startup folder (`shell:startup`).
 | GET | `/api/novels/{id}/chapters` | Paginated chapter list |
 | POST | `/api/novels/{id}/refresh` | Re-crawl for new chapters |
 | GET | `/api/chapters/{id}/stream` | Stream/serve synthesized audio |
+| GET | `/api/chapters/{id}/hls.m3u8` | Live HLS playlist (Instant Play, Safari/iOS) |
+| GET | `/api/chapters/{id}/hls/{n}.aac` | HLS AAC segment |
 | GET | `/api/chapters/{id}/status` | Check synthesis status |
 | POST | `/api/chapters/{id}/synthesize` | Start background synthesis |
 | GET | `/api/progress/{novel_id}` | Get reading progress |

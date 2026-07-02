@@ -354,18 +354,16 @@ function renderPagination() {
         return;
     }
 
-    let html = '';
-    html += `<button ${state.chapterPage <= 1 ? 'disabled' : ''} data-page="${state.chapterPage - 1}">‹ Prev</button>`;
-    for (let i = 1; i <= state.chapterTotalPages; i++) {
-        if (state.chapterTotalPages > 7 && Math.abs(i - state.chapterPage) > 2 && i !== 1 && i !== state.chapterTotalPages) {
-            if (i === state.chapterPage - 3 || i === state.chapterPage + 3) html += '<button disabled>…</button>';
-            continue;
-        }
-        html += `<button class="${i === state.chapterPage ? 'active' : ''}" data-page="${i}">${i}</button>`;
-    }
-    html += `<button ${state.chapterPage >= state.chapterTotalPages ? 'disabled' : ''} data-page="${state.chapterPage + 1}">Next ›</button>`;
+    const options = Array.from({ length: state.chapterTotalPages }, (_, i) => {
+        const p = i + 1;
+        return `<option value="${p}" ${p === state.chapterPage ? 'selected' : ''}>Page ${p} of ${state.chapterTotalPages}</option>`;
+    }).join('');
 
-    el.innerHTML = html;
+    el.innerHTML =
+        `<button ${state.chapterPage <= 1 ? 'disabled' : ''} data-page="${state.chapterPage - 1}">‹ Prev</button>` +
+        `<select id="page-select" title="Jump to page">${options}</select>` +
+        `<button ${state.chapterPage >= state.chapterTotalPages ? 'disabled' : ''} data-page="${state.chapterPage + 1}">Next ›</button>`;
+
     el.querySelectorAll('button[data-page]').forEach(btn => {
         btn.addEventListener('click', () => {
             const p = parseInt(btn.dataset.page);
@@ -374,6 +372,10 @@ function renderPagination() {
                 loadChapters();
             }
         });
+    });
+    el.querySelector('#page-select').addEventListener('change', (e) => {
+        state.chapterPage = parseInt(e.target.value);
+        loadChapters();
     });
 }
 
@@ -583,7 +585,75 @@ async function playFullFile(chapterId) {
     startProgressSaving();
 }
 
+// Safari (macOS/iOS) plays HLS natively in <audio>; a growing EVENT playlist
+// gives seamless segment transitions plus background/lock-screen playback.
+const supportsNativeHls = new Audio().canPlayType('application/vnd.apple.mpegurl') !== '';
+
 async function playInstant(chapterId) {
+    if (supportsNativeHls) {
+        await playInstantHls(chapterId);
+    } else {
+        await playInstantSegments(chapterId);
+    }
+}
+
+async function playInstantHls(chapterId) {
+    const loadingEl = document.getElementById('player-loading');
+    const scrubbar = document.getElementById('player-scrubbar');
+    const durationEl = document.getElementById('player-duration');
+
+    loadingEl.style.display = 'inline';
+    loadingEl.textContent = 'Starting...';
+
+    // Wait for the first AAC segment (or fall back if the chapter is already
+    // synthesized, or AAC encoding is unavailable on the server)
+    while (state.playback.chapter?.id === chapterId) {
+        let segData;
+        try {
+            segData = await api('GET', `/api/chapters/${chapterId}/segments`);
+        } catch (e) {
+            showToast('Streaming failed: ' + e.message);
+            loadingEl.style.display = 'none';
+            state.isSynthesizing = false;
+            return;
+        }
+        if (segData.segment_count === 0 && segData.file_ready) {
+            state.isSynthesizing = false;
+            loadingEl.style.display = 'none';
+            await playFullFile(chapterId);
+            return;
+        }
+        if (segData.aac_count > 0) break;
+        if (segData.segment_count >= 2) {
+            // WAV segments exist but no AAC — ffmpeg missing/failing on server
+            await playInstantSegments(chapterId);
+            return;
+        }
+        await new Promise(r => setTimeout(r, 400));
+    }
+    if (state.playback.chapter?.id !== chapterId) return;
+
+    // Duration is Infinity while the playlist grows; the durationchange
+    // handler restores the scrubbar once #EXT-X-ENDLIST lands.
+    scrubbar.style.display = 'none';
+    durationEl.textContent = 'Streaming...';
+
+    state.audio.src = `/api/chapters/${chapterId}/hls.m3u8`;
+    applyPlaybackRate();
+    state.audio.load();
+    try {
+        await state.audio.play();
+    } catch (e) {}
+    if (state.playback.chapter?.id !== chapterId) return;
+
+    state.isSynthesizing = false;
+    loadingEl.style.display = 'none';
+    updateMediaSession();
+    saveProgress();
+    startProgressSaving();
+}
+
+async function playInstantSegments(chapterId) {
     const loadingEl = document.getElementById('player-loading');
     const playBtn = document.getElementById('btn-play-pause');
     const durationEl = document.getElementById('player-duration');
@@ -744,17 +814,10 @@ async function playInstant(chapterId) {
 
 function togglePlayPause() {
     if (!state.audio.src) return;
-
-    if (state.isPlaying) {
-        state.audio.pause();
-        state.isPlaying = false;
-        document.getElementById('btn-play-pause').textContent = '▶';
-        saveProgress();
+    if (state.audio.paused) {
+        state.audio.play().catch(() => {});
     } else {
-        state.audio.play().then(() => {
-            state.isPlaying = true;
-            document.getElementById('btn-play-pause').textContent = '⏸';
-        }).catch(() => {});
+        state.audio.pause();
     }
 }
 
@@ -798,11 +861,31 @@ function setupAudioEvents() {
     const duration = document.getElementById('player-duration');
     const loadingEl = document.getElementById('player-loading');
 
+    // Single source of truth for play/pause UI and the OS media session —
+    // required for iOS to keep the Now Playing session claimable while paused.
+    audio.addEventListener('play', () => {
+        state.isPlaying = true;
+        document.getElementById('btn-play-pause').textContent = '⏸';
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        updatePositionState();
+    });
+
+    audio.addEventListener('pause', () => {
+        state.isPlaying = false;
+        if (!state.isSynthesizing) {
+            document.getElementById('btn-play-pause').textContent = '▶';
+        }
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        saveProgress();
+    });
+
     audio.addEventListener('timeupdate', () => {
         if (state._instantActive) return;  // scrubbar hidden during segment playback
         if (!audio.duration) return;
         currentTime.textContent = formatTime(audio.currentTime);
-        scrubbar.value = (audio.currentTime / audio.duration) * 100;
+        if (isFinite(audio.duration)) {
+            scrubbar.value = (audio.currentTime / audio.duration) * 100;
+        }
     });
 
     audio.addEventListener('loadedmetadata', () => {
@@ -811,7 +894,20 @@ function setupAudioEvents() {
             duration.textContent = formatTime(audio.duration);
             scrubbar.max = 100;
         }
+        updatePositionState();
     });
+
+    audio.addEventListener('durationchange', () => {
+        if (state._instantActive) return;
+        if (audio.duration && isFinite(audio.duration)) {
+            duration.textContent = formatTime(audio.duration);
+            scrubbar.style.display = '';
+        }
+        updatePositionState();
+    });
+
+    audio.addEventListener('seeked', updatePositionState);
+    audio.addEventListener('ratechange', updatePositionState);
 
     audio.addEventListener('canplay', () => {
         if (state._instantActive) return;  // handled by segment logic
@@ -861,16 +957,33 @@ function updateMediaSession() {
             : [],
     });
 
-    navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
-    navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-        seekRelative(-(details.seekOffset || 15));
+    // Explicit handlers — a toggle here desyncs when iOS's idea of the state
+    // differs from ours, which broke resume from the lock screen.
+    navigator.mediaSession.setActionHandler('play', () => {
+        state.audio.play().catch(() => {});
     });
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
-        seekRelative(details.seekOffset || 30);
+    navigator.mediaSession.setActionHandler('pause', () => {
+        state.audio.pause();
     });
+    // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
+    // (often "10") but the page controls the actual jump.
+    navigator.mediaSession.setActionHandler('seekbackward', () => seekRelative(-15));
+    navigator.mediaSession.setActionHandler('seekforward', () => seekRelative(30));
     navigator.mediaSession.setActionHandler('previoustrack', () => playAdjacentChapter(-1));
     navigator.mediaSession.setActionHandler('nexttrack', () => playAdjacentChapter(1));
+}
+
+function updatePositionState() {
+    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+    const { duration, currentTime, playbackRate } = state.audio;
+    if (!isFinite(duration) || !duration) return;
+    try {
+        navigator.mediaSession.setPositionState({
+            duration: duration,
+            playbackRate: playbackRate,
+            position: Math.min(currentTime, duration),
+        });
+    } catch (e) {}
 }
 
 // ===== Progress Saving =====

@@ -423,6 +423,16 @@ a:hover { color: var(--accent-hover); }
     transition: background 0.2s;
 }
 .pagination button:hover { background: var(--bg-hover); }
+
+.pagination select {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    outline: none;
+}
 .pagination button.active {
     background: var(--accent);
     border-color: var(--accent);
