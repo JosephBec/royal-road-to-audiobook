@@ -4,9 +4,11 @@ Chapter API routes.
 Handles chapter listing, audio streaming, and synthesis status.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
+import soundfile as sf
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -182,30 +184,10 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
-    # Check if already done
-    status = get_chapter_status(chapter_id)
-    if status["ready"]:
-        return {**status, "mode": "full"}
-
     novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
     settings = db.query(Settings).first()
     voice = effective_settings(novel, settings)["voice"]
     playback_mode = settings.playback_mode if settings else "full"
-
-    # Scrape text
-    try:
-        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
-
-    # Update word count
-    chapter.word_count = len(text.split())
-    chapter.fetched_at = datetime.now(timezone.utc)
-    db.commit()
-
-    import asyncio
 
     # Gather all DB data we need BEFORE launching background tasks
     # (the DB session will be closed when the request returns)
@@ -235,7 +217,7 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
 
     async def _after_synthesis():
         """Prefetch next chapter and cleanup old files after synthesis."""
-        if prefetch_id and prefetch_url:
+        if prefetch_id and prefetch_url and not temp_path_for_chapter(prefetch_id).exists():
             prefetch_scraper = get_scraper_for_url(prefetch_url)
             if not prefetch_scraper:
                 logger.warning("No scraper for prefetch URL, skipping: %s", prefetch_url)
@@ -246,6 +228,27 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
                 except Exception as e:
                     logger.warning("Prefetch failed for chapter %s: %s", prefetch_id, e)
         cleanup_temp_files(keep_ids)
+
+    # If this chapter is already synthesized, still run the after-step:
+    # the prefetch chain used to break here, leaving autoplay with a cold
+    # cache every other chapter.
+    status = get_chapter_status(chapter_id)
+    if status["ready"]:
+        asyncio.create_task(_after_synthesis())
+        return {**status, "mode": "full"}
+
+    # Scrape text
+    try:
+        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
+
+    # Update word count
+    chapter.word_count = len(text.split())
+    chapter.fetched_at = datetime.now(timezone.utc)
+    db.commit()
 
     if playback_mode == "instant":
         async def _run_streaming():
@@ -267,7 +270,6 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
     Get the current streaming synthesis state for a chapter.
     Scans the filesystem for segment files to avoid GIL starvation issues.
     """
-    import soundfile as _sf
     chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
@@ -285,7 +287,7 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
         if not seg_path.exists():
             break
         try:
-            info = _sf.info(str(seg_path))
+            info = sf.info(str(seg_path))
             segment_durations.append(info.duration)
             total_duration += info.duration
         except Exception:

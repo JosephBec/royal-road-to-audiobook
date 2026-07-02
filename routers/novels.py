@@ -95,12 +95,7 @@ async def list_novels(db: Session = Depends(get_db)):
 
 @router.post("", response_model=NovelResponse, status_code=201)
 async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
-    """Add a novel by Royal Road URL."""
-    # Check if already exists
-    existing = db.query(Novel).filter(Novel.rr_url.contains("/fiction/")).filter(
-        Novel.rr_url == req.url.rstrip("/")
-    ).first()
-
+    """Add a novel by URL (any site with a registered scraper)."""
     scraper = get_scraper_for_url(req.url)
     if not scraper:
         raise HTTPException(
