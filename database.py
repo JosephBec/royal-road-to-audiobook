@@ -9,7 +9,8 @@ from typing import Optional
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, Float,
-    DateTime, ForeignKey, Boolean, UniqueConstraint
+    DateTime, ForeignKey, Boolean, UniqueConstraint,
+    text, inspect as sa_inspect,
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Session, sessionmaker, relationship
@@ -38,6 +39,12 @@ class Novel(Base):
     total_chapters = Column(Integer, default=0)
     last_refreshed = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Per-novel setting overrides; NULL = use global Settings default
+    voice = Column(String, nullable=True)
+    speed = Column(Float, nullable=True)
+    auto_play = Column(Boolean, nullable=True)
+    chapter_sort = Column(String, nullable=True)
 
     chapters = relationship("Chapter", back_populates="novel", cascade="all, delete-orphan")
     progress = relationship("Progress", back_populates="novel", uselist=False, cascade="all, delete-orphan")
@@ -88,9 +95,36 @@ class Settings(Base):
     chapter_sort = Column(String, default="asc")  # "asc" or "desc"
 
 
+def _migrate_schema():
+    """Add columns introduced after initial release (SQLite has no Alembic here)."""
+    inspector = sa_inspect(engine)
+    existing = {c["name"] for c in inspector.get_columns("novels")}
+    new_columns = {
+        "voice": "TEXT",
+        "speed": "FLOAT",
+        "auto_play": "BOOLEAN",
+        "chapter_sort": "TEXT",
+    }
+    with engine.begin() as conn:
+        for name, ddl_type in new_columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE novels ADD COLUMN {name} {ddl_type}"))
+
+
+def effective_settings(novel: "Novel", settings: "Settings") -> dict:
+    """Resolve per-novel overrides against global settings (None = inherit)."""
+    return {
+        "voice": novel.voice if novel.voice is not None else (settings.voice if settings else "af_heart"),
+        "speed": novel.speed if novel.speed is not None else (settings.speed if settings else 1.0),
+        "auto_play": novel.auto_play if novel.auto_play is not None else (settings.auto_play if settings else True),
+        "chapter_sort": novel.chapter_sort if novel.chapter_sort is not None else (settings.chapter_sort if settings else "asc"),
+    }
+
+
 def init_db():
     """Create all tables and ensure default settings exist."""
     Base.metadata.create_all(bind=engine)
+    _migrate_schema()
     db = SessionLocal()
     try:
         settings = db.query(Settings).first()
