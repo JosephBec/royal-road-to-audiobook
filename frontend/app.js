@@ -71,6 +71,11 @@ async function api(method, path, body = null) {
     return resp.json();
 }
 
+function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function formatTime(seconds) {
     if (!seconds || isNaN(seconds)) return '--:--';
     const m = Math.floor(seconds / 60);
@@ -122,12 +127,12 @@ function renderLibrary() {
         <div class="novel-card" data-id="${novel.id}">
             <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             ${novel.cover_url
-                ? `<img class="novel-card-cover" src="${novel.cover_url}" alt="${novel.title}" loading="lazy">`
+                ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy">`
                 : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
             }
             <div class="novel-card-body">
-                <div class="novel-card-title">${novel.title}</div>
-                <div class="novel-card-author">${novel.author}</div>
+                <div class="novel-card-title">${escapeHtml(novel.title)}</div>
+                <div class="novel-card-author">${escapeHtml(novel.author)}</div>
                 <div class="novel-card-progress">
                     <span>${novel.total_chapters} chapters</span>
                     ${novel.progress_chapter
@@ -318,7 +323,7 @@ function renderChapters() {
     list.innerHTML = state.chapters.map(ch => `
         <div class="chapter-row ${ch.is_current ? 'current' : ''}" data-id="${ch.id}">
             <span class="chapter-number">${ch.order}</span>
-            <span class="chapter-title-text">${ch.title}</span>
+            <span class="chapter-title-text">${escapeHtml(ch.title)}</span>
             ${ch.word_count ? `<span class="chapter-meta">${(ch.word_count / 1000).toFixed(1)}k words</span>` : ''}
             ${ch.is_current ? '<span class="current-badge">Current</span>' : ''}
             <button class="chapter-play-btn" data-id="${ch.id}" title="Play">▶</button>
@@ -914,7 +919,7 @@ function openSettings() {
     // Populate voice dropdown
     const voiceSelect = document.getElementById('setting-voice');
     voiceSelect.innerHTML = state.voices.map(v =>
-        `<option value="${v.id}" ${v.id === state.settings.voice ? 'selected' : ''}>${v.label}</option>`
+        `<option value="${escapeHtml(v.id)}" ${v.id === state.settings.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
 
     // Speed
@@ -951,9 +956,9 @@ function openNovelSettings() {
 
     const globalVoiceLabel = state.voices.find(v => v.id === state.settings.voice)?.label || state.settings.voice;
     document.getElementById('ns-voice').innerHTML =
-        `<option value="">Default (${globalVoiceLabel})</option>` +
+        `<option value="">Default (${escapeHtml(globalVoiceLabel)})</option>` +
         state.voices.map(v =>
-            `<option value="${v.id}" ${v.id === ov.voice ? 'selected' : ''}>${v.label}</option>`
+            `<option value="${escapeHtml(v.id)}" ${v.id === ov.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
         ).join('');
 
     document.getElementById('ns-speed-value').textContent =

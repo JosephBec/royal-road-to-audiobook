@@ -48,6 +48,14 @@
     --shadow: 0 4px 24px rgba(0,0,0,0.08);
 }
 
+/* Disable double-tap-to-zoom (keeps pinch zoom and scrolling) */
+html, body {
+    touch-action: manipulation;
+}
+button, input, select {
+    touch-action: manipulation;
+}
+
 html, body {
     font-family: var(--font);
     background: var(--bg-primary);
