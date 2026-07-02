@@ -971,6 +971,18 @@ function updateMediaSession() {
     navigator.mediaSession.setActionHandler('seekforward', () => seekRelative(30));
     navigator.mediaSession.setActionHandler('previoustrack', () => playAdjacentChapter(-1));
     navigator.mediaSession.setActionHandler('nexttrack', () => playAdjacentChapter(1));
+    // Without a seekto handler, the lock-screen progress bar is read-only
+    try {
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+            if (details.seekTime == null) return;
+            if (details.fastSeek && 'fastSeek' in state.audio) {
+                state.audio.fastSeek(details.seekTime);
+            } else {
+                state.audio.currentTime = details.seekTime;
+            }
+            updatePositionState();
+        });
+    } catch (e) { /* seekto unsupported on this browser */ }
 }
 
 function updatePositionState() {
