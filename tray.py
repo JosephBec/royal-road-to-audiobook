@@ -13,6 +13,7 @@ import os
 import sys
 import subprocess
 import threading
+import time
 import webbrowser
 import signal
 import socket
@@ -132,8 +133,34 @@ def start_server():
     )
 
 
+def _pids_listening_on_port(port):
+    """PIDs of processes LISTENING on the given TCP port (netstat parse)."""
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano", "-p", "tcp"],
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if (len(parts) >= 5 and parts[0] == "TCP"
+                and parts[1].endswith(f":{port}") and "LISTENING" in parts):
+            try:
+                pids.add(int(parts[-1]))
+            except ValueError:
+                pass
+    return pids
+
+
 def stop_server():
-    """Stop the server subprocess."""
+    """
+    Stop the server: our own subprocess if we spawned it, and otherwise
+    whatever process holds the port — the tray may have been relaunched
+    since the server was started, in which case it isn't our child.
+    """
     global server_process
     if server_process and server_process.poll() is None:
         server_process.terminate()
@@ -143,11 +170,31 @@ def stop_server():
             server_process.kill()
     server_process = None
 
+    for pid in _pids_listening_on_port(PORT):
+        if pid == os.getpid():
+            continue
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+    # Wait for the port to actually free so a restart can bind
+    for _ in range(20):
+        if not is_port_in_use(PORT):
+            return
+        time.sleep(0.5)
+
 
 def restart_server():
-    """Restart the server."""
+    """Restart the server and update the tooltip once it's back up."""
     stop_server()
     start_server()
+    # Model imports take a while before the port binds; poll before updating
+    for _ in range(60):
+        if is_port_in_use(PORT):
+            break
+        time.sleep(1)
     update_tray_title()
 
 
