@@ -218,6 +218,7 @@ a:hover { color: var(--accent-hover); }
 }
 
 .novel-card-progress .progress-badge {
+    cursor: pointer;
     background: var(--accent-dim);
     color: var(--accent);
     padding: 2px 8px;
@@ -261,6 +262,11 @@ a:hover { color: var(--accent-hover); }
     gap: 16px;
     margin-bottom: 16px;
     flex-wrap: wrap;
+}
+
+.resume-btn {
+    display: block;
+    margin: 0 auto 16px;
 }
 
 .novel-description {

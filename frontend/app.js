@@ -131,7 +131,7 @@ function renderLibrary() {
                 <div class="novel-card-progress">
                     <span>${novel.total_chapters} chapters</span>
                     ${novel.progress_chapter
-                        ? `<span class="progress-badge">Ch. ${novel.progress_chapter}</span>`
+                        ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                         : ''
                     }
                 </div>
@@ -144,6 +144,14 @@ function renderLibrary() {
         card.addEventListener('click', (e) => {
             if (e.target.closest('.novel-card-delete')) return;
             openNovel(parseInt(card.dataset.id));
+        });
+    });
+
+    // Progress badges → resume shortcut
+    grid.querySelectorAll('.progress-badge').forEach(badge => {
+        badge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openNovel(parseInt(badge.dataset.novelId), { resume: true });
         });
     });
 
@@ -205,7 +213,7 @@ async function addNovel() {
 }
 
 // ===== Novel Detail =====
-async function openNovel(novelId) {
+async function openNovel(novelId, opts = {}) {
     const novel = state.novels.find(n => n.id === novelId);
     if (!novel) return;
 
@@ -242,6 +250,44 @@ async function openNovel(novelId) {
     }
 
     await loadChapters();
+    const progress = await updateResumeButton();
+    if (opts.resume && progress?.chapter_id) {
+        await resumeNovel(novel, progress.chapter_id);
+    }
+}
+
+async function updateResumeButton() {
+    const btn = document.getElementById('btn-resume');
+    btn.style.display = 'none';
+    if (!state.currentNovel) return null;
+    try {
+        const progress = await api('GET', `/api/progress/${state.currentNovel.id}`);
+        if (!progress.chapter_id) return null;
+        const pos = progress.position_seconds > 5 ? ` (${formatTime(progress.position_seconds)})` : '';
+        btn.textContent = `▶ Resume — Ch. ${progress.chapter_order}${pos}`;
+        btn.style.display = '';
+        const novel = state.currentNovel;
+        btn.onclick = () => resumeNovel(novel, progress.chapter_id);
+        return progress;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function resumeNovel(novel, chapterId) {
+    try {
+        const queue = await loadPlaybackQueue(novel.id);
+        const target = queue.find(c => c.id === chapterId);
+        if (!target) {
+            showToast('Saved chapter not found');
+            return;
+        }
+        state.playback.novel = novel;
+        state.playback.chapters = queue;
+        await playChapter(target, novel);
+    } catch (e) {
+        showToast('Resume failed: ' + e.message);
+    }
 }
 
 function closeNovel() {
