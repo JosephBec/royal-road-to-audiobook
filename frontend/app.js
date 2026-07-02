@@ -11,9 +11,13 @@ const state = {
     chapters: [],
     chapterPage: 1,
     chapterTotalPages: 1,
-    // Player
-    currentChapterId: null,
-    currentNovelId: null,
+    chapterTotal: 0,
+    // Player (decoupled from the browsed novel so navigation can't hijack playback)
+    playback: {
+        novel: null,      // novel being played
+        chapters: [],     // full ascending chapter list for that novel
+        chapter: null,    // chapter currently loaded in the player
+    },
     isPlaying: false,
     isSynthesizing: false,
     audio: new Audio(),
@@ -255,6 +259,7 @@ async function loadChapters() {
         const data = await api('GET', `/api/novels/${state.currentNovel.id}/chapters?page=${state.chapterPage}&per_page=50`);
         state.chapters = data.chapters;
         state.chapterTotalPages = data.total_pages;
+        state.chapterTotal = data.total;
         renderChapters();
     } catch (e) {
         console.error('Failed to load chapters:', e);
@@ -276,13 +281,15 @@ function renderChapters() {
 
     // Click handlers
     list.querySelectorAll('.chapter-row').forEach(row => {
-        row.addEventListener('click', () => playChapter(parseInt(row.dataset.id)));
+        row.addEventListener('click', () => {
+            playChapter(state.chapters.find(c => c.id === parseInt(row.dataset.id)));
+        });
     });
 
     list.querySelectorAll('.chapter-play-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            playChapter(parseInt(btn.dataset.id));
+            playChapter(state.chapters.find(c => c.id === parseInt(btn.dataset.id)));
         });
     });
 
@@ -349,9 +356,51 @@ function stopInstantPlay() {
     state._instantActive = false;
 }
 
-async function playChapter(chapterId) {
-    const chapter = state.chapters.find(c => c.id === chapterId);
-    if (!chapter) return;
+async function loadPlaybackQueue(novelId) {
+    const data = await api('GET', `/api/novels/${novelId}/chapters?page=1&per_page=10000`);
+    // Queue is always ascending regardless of display sort
+    return data.chapters.slice().sort((a, b) => a.order - b.order);
+}
+
+function playbackSetting(key) {
+    // Per-novel override of the playing novel, else global default
+    const override = state.playback.novel?.settings?.[key];
+    return override != null ? override : state.settings[key];
+}
+
+function markCurrentChapter(chapterId) {
+    if (state.currentNovel?.id !== state.playback.novel?.id) return;
+    state.chapters.forEach(c => { c.is_current = c.id === chapterId; });
+    document.querySelectorAll('#chapter-list .chapter-row').forEach(row => {
+        const isCur = parseInt(row.dataset.id) === chapterId;
+        row.classList.toggle('current', isCur);
+        const badge = row.querySelector('.current-badge');
+        if (isCur && !badge) {
+            const b = document.createElement('span');
+            b.className = 'current-badge';
+            b.textContent = 'Current';
+            row.insertBefore(b, row.querySelector('.chapter-play-btn'));
+        } else if (!isCur && badge) {
+            badge.remove();
+        }
+    });
+}
+
+async function playChapter(chapter, novel = state.currentNovel) {
+    if (!chapter || !novel) return;
+    const chapterId = chapter.id;
+
+    // Load the playback queue when switching novels (or on first play)
+    if (state.playback.novel?.id !== novel.id) {
+        try {
+            state.playback.chapters = await loadPlaybackQueue(novel.id);
+        } catch (e) {
+            showToast('Failed to load chapter list: ' + e.message);
+            return;
+        }
+        state.playback.novel = novel;
+    }
+    state.playback.chapter = chapter;
 
     // Stop any current playback
     stopInstantPlay();
@@ -361,14 +410,13 @@ async function playChapter(chapterId) {
     state.isPlaying = false;
     state._instantSwapped = false;
 
-    state.currentChapterId = chapterId;
-    state.currentNovelId = state.currentNovel?.id || null;
+    markCurrentChapter(chapterId);
 
     // Show player
     const player = document.getElementById('mini-player');
     player.style.display = 'flex';
 
-    document.getElementById('player-novel-title').textContent = state.currentNovel?.title || '';
+    document.getElementById('player-novel-title').textContent = novel.title;
     document.getElementById('player-chapter-title').textContent = chapter.title;
     document.getElementById('player-current-time').textContent = '0:00';
     document.getElementById('player-duration').textContent = '--:--';
@@ -395,7 +443,7 @@ async function playChapter(chapterId) {
         return;
     }
 
-    if (state.currentChapterId !== chapterId) return;
+    if (state.playback.chapter?.id !== chapterId) return;
 
     if (synthResult && synthResult.ready) {
         // Already synthesized — play full file directly
@@ -414,13 +462,12 @@ async function playChapter(chapterId) {
 
 async function playFull(chapterId) {
     const loadingEl = document.getElementById('player-loading');
-    const playBtn = document.getElementById('btn-play-pause');
 
     // Poll until full file is ready
     let ready = false;
     while (!ready) {
         await new Promise(r => setTimeout(r, 1500));
-        if (state.currentChapterId !== chapterId) return;
+        if (state.playback.chapter?.id !== chapterId) return;
         try {
             const status = await api('GET', `/api/chapters/${chapterId}/status`);
             if (status.ready) {
@@ -429,12 +476,17 @@ async function playFull(chapterId) {
                     document.getElementById('player-duration').textContent = formatTime(status.duration_seconds);
                 }
             }
-        } catch (e) { break; }
+        } catch (e) {
+            showToast('Synthesis check failed: ' + e.message);
+            loadingEl.style.display = 'none';
+            state.isSynthesizing = false;
+            return;
+        }
     }
 
     state.isSynthesizing = false;
     loadingEl.style.display = 'none';
-    if (state.currentChapterId !== chapterId) return;
+    if (state.playback.chapter?.id !== chapterId) return;
     await playFullFile(chapterId);
 }
 
@@ -451,14 +503,15 @@ async function playFullFile(chapterId) {
         state.audio.addEventListener('error', onErr);
     });
 
-    if (state.currentChapterId !== chapterId) return;
+    if (state.playback.chapter?.id !== chapterId) return;
 
     applyPlaybackRate();
 
     // Restore saved progress
-    if (state.currentNovelId) {
+    const playingNovelId = state.playback.novel?.id;
+    if (playingNovelId) {
         try {
-            const progress = await api('GET', `/api/progress/${state.currentNovelId}`);
+            const progress = await api('GET', `/api/progress/${playingNovelId}`);
             if (progress.chapter_id === chapterId && progress.position_seconds > 0) {
                 state.audio.currentTime = progress.position_seconds;
             }
@@ -533,14 +586,14 @@ async function playInstant(chapterId) {
     }
 
     // Main loop: poll for segments, play them one by one
-    while (state._instantActive && state.currentChapterId === chapterId) {
+    while (state._instantActive && state.playback.chapter?.id === chapterId) {
         // Poll for segment availability
         let segData;
         try {
             segData = await api('GET', `/api/chapters/${chapterId}/segments`);
         } catch (e) { break; }
 
-        if (state.currentChapterId !== chapterId || !state._instantActive) break;
+        if (state.playback.chapter?.id !== chapterId || !state._instantActive) break;
 
         totalDuration = segData.total_duration || totalDuration;
         segCount = segData.segment_count;
@@ -571,7 +624,7 @@ async function playInstant(chapterId) {
                 break;
             }
 
-            if (state.currentChapterId !== chapterId || !state._instantActive) break;
+            if (state.playback.chapter?.id !== chapterId || !state._instantActive) break;
 
             // Show brief loading between segments
             loadingEl.style.display = 'inline';
@@ -601,7 +654,7 @@ async function playInstant(chapterId) {
                         state.audio.addEventListener('error', onErr);
                     });
 
-                    if (state.currentChapterId !== chapterId) return;
+                    if (state.playback.chapter?.id !== chapterId) return;
 
                     // Restore scrubbar now that full file is loaded
                     scrubbar.style.display = '';
@@ -656,34 +709,35 @@ function togglePlayPause() {
 
 function seekRelative(seconds) {
     if (!state.audio.src) return;
-    state.audio.currentTime = Math.max(0, Math.min(state.audio.duration || 0, state.audio.currentTime + seconds));
+    const max = isFinite(state.audio.duration) ? state.audio.duration : Infinity;
+    state.audio.currentTime = Math.max(0, Math.min(max, state.audio.currentTime + seconds));
 }
 
 async function playAdjacentChapter(direction) {
-    if (!state.currentNovelId || !state.currentChapterId) return;
+    const { chapter, chapters, novel } = state.playback;
+    if (!chapter || !novel) return;
 
-    const current = state.chapters.find(c => c.id === state.currentChapterId);
-    if (!current) return;
-
-    const targetOrder = current.order + direction;
-    let target = state.chapters.find(c => c.order === targetOrder);
-
-    // If not on current page, fetch from API
+    const target = chapters.find(c => c.order === chapter.order + direction);
     if (!target) {
-        try {
-            const data = await api('GET', `/api/novels/${state.currentNovelId}/chapters?page=1&per_page=10000`);
-            target = data.chapters.find(c => c.order === targetOrder);
-        } catch (e) {
-            showToast(`Couldn't load chapter list: ${e.message}`);
-            return;
-        }
-    }
-
-    if (target) {
-        playChapter(target.id);
-    } else {
         showToast(direction > 0 ? 'No next chapter' : 'No previous chapter');
+        return;
     }
+    await playChapter(target, novel);
+    followPlaybackPage(target);
+}
+
+async function followPlaybackPage(target) {
+    // If the user is viewing the playing novel and the new chapter is on a
+    // different page, follow it so the visible list tracks playback.
+    if (state.currentNovel?.id !== state.playback.novel?.id) return;
+    if (state.chapters.some(c => c.id === target.id)) return;
+    const perPage = 50;
+    const sort = state.currentNovel.effective_settings?.chapter_sort || state.settings.chapter_sort;
+    state.chapterPage = sort === 'desc'
+        ? Math.max(1, Math.ceil((state.chapterTotal - target.order + 1) / perPage))
+        : Math.max(1, Math.ceil(target.order / perPage));
+    await loadChapters();
+    markCurrentChapter(target.id);
 }
 
 function setupAudioEvents() {
@@ -721,8 +775,8 @@ function setupAudioEvents() {
         document.getElementById('btn-play-pause').textContent = '▶';
         saveProgress();
 
-        // Auto-play next chapter
-        if (state.settings.auto_play) {
+        // Auto-play next chapter (per-novel override wins)
+        if (playbackSetting('auto_play')) {
             await playAdjacentChapter(1);
         }
     });
@@ -744,15 +798,15 @@ function setupAudioEvents() {
 function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
-    const title = state.chapters?.find(c => c.id === state.currentChapterId)?.title || 'Chapter';
-    const novel = state.currentNovel?.title || 'Royal Road TTS';
+    const title = state.playback.chapter?.title || 'Chapter';
+    const novel = state.playback.novel?.title || 'Royal Road TTS';
 
     navigator.mediaSession.metadata = new MediaMetadata({
         title: title,
         artist: novel,
-        album: state.currentNovel?.author || '',
-        artwork: state.currentNovel?.cover_url
-            ? [{ src: state.currentNovel.cover_url, sizes: '512x512', type: 'image/jpeg' }]
+        album: state.playback.novel?.author || '',
+        artwork: state.playback.novel?.cover_url
+            ? [{ src: state.playback.novel.cover_url, sizes: '512x512', type: 'image/jpeg' }]
             : [],
     });
 
@@ -770,10 +824,12 @@ function updateMediaSession() {
 
 // ===== Progress Saving =====
 async function saveProgress() {
-    if (!state.currentNovelId || !state.currentChapterId) return;
+    const novelId = state.playback.novel?.id;
+    const chapterId = state.playback.chapter?.id;
+    if (!novelId || !chapterId) return;
     try {
-        await api('PUT', `/api/progress/${state.currentNovelId}`, {
-            chapter_id: state.currentChapterId,
+        await api('PUT', `/api/progress/${novelId}`, {
+            chapter_id: chapterId,
             position_seconds: state.audio.currentTime || 0,
         });
     } catch (e) {
@@ -832,7 +888,7 @@ function openSettings() {
 }
 
 function applyPlaybackRate() {
-    state.audio.playbackRate = state.settings.speed;
+    state.audio.playbackRate = playbackSetting('speed');
 }
 
 function closeSettings() {
