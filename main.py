@@ -20,11 +20,11 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 
-from database import init_db
+from database import init_db, SessionLocal, Progress
 from routers import novels, chapters, progress, settings
-from tts import cleanup_all_temp_files
+from tts import cleanup_temp_files
 
 # Configure logging
 logging.basicConfig(
@@ -35,17 +35,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _progress_chapter_ids() -> set[int]:
+    """Chapter IDs with saved progress — their audio is kept for instant resume."""
+    db = SessionLocal()
+    try:
+        return {
+            p.chapter_id
+            for p in db.query(Progress).filter(Progress.chapter_id.isnot(None)).all()
+        }
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup, clean temp files on startup/shutdown."""
+    """Initialize database on startup, clean temp files on startup/shutdown.
+
+    In-progress chapters (saved playback position) survive cleanup so a
+    half-finished chapter resumes instantly without re-synthesizing.
+    """
     logger.info("Initializing database...")
     init_db()
     logger.info("Cleaning up temp audio files from previous session...")
-    cleanup_all_temp_files()
+    cleanup_temp_files(_progress_chapter_ids())
     logger.info("Royal Road TTS server ready.")
     yield
     logger.info("Shutting down — cleaning up temp audio files...")
-    cleanup_all_temp_files()
+    cleanup_temp_files(_progress_chapter_ids())
 
 
 app = FastAPI(
@@ -82,8 +98,17 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 @app.get("/")
 async def serve_index():
-    """Serve the frontend SPA."""
-    return FileResponse(str(FRONTEND_DIR / "index.html"))
+    """
+    Serve the frontend SPA with version-stamped asset URLs (mtime-based), so
+    a browser holding stale cached app.js/style.css is forced to re-fetch
+    them whenever they change — phone Safari ignores freshness headers it
+    never saw when it first cached an asset.
+    """
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    version = int(max(
+        (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
+    ))
+    return HTMLResponse(html.replace("__V__", str(version)))
 
 
 @app.get("/api/voices")

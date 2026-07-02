@@ -213,6 +213,11 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
         keep_ids.add(prev_ch.id)
     for nch in next_chapters:
         keep_ids.add(nch.id)
+    # Keep every novel's in-progress chapter cached so resuming is instant
+    keep_ids |= {
+        p.chapter_id
+        for p in db.query(Progress).filter(Progress.chapter_id.isnot(None)).all()
+    }
 
     # Extract prefetch target info
     prefetch_id = next_chapters[0].id if next_chapters else None

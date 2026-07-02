@@ -136,6 +136,18 @@ def cleanup_temp_files(keep_ids: set[int]):
             _streaming_state.pop(ch_id, None)
 
 
+def remove_chapter_audio(chapter_ids: set[int]):
+    """Delete cached audio for specific chapters (e.g. after a voice change)."""
+    for f in _all_temp_audio_files():
+        try:
+            ch_id = int(f.stem.split("_")[1])
+            if ch_id in chapter_ids:
+                f.unlink()
+                _streaming_state.pop(ch_id, None)
+        except (ValueError, IndexError):
+            pass
+
+
 def cleanup_all_temp_files():
     """Remove ALL temp audio files. Called on server startup/shutdown."""
     count = 0

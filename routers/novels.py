@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db, Novel, Chapter, Progress, Settings, effective_settings
 from scrapers import get_scraper_for_url, supported_sites
+from tts import remove_chapter_audio
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/novels", tags=["novels"])
@@ -184,10 +185,16 @@ async def update_novel_settings(
     if "chapter_sort" in provided and req.chapter_sort not in (None, "asc", "desc"):
         raise HTTPException(status_code=400, detail="Chapter sort must be 'asc' or 'desc'")
 
+    voice_changed = "voice" in provided and req.voice != novel.voice
     for field in ("voice", "speed", "auto_play", "chapter_sort"):
         if field in provided:
             setattr(novel, field, getattr(req, field))
     db.commit()
+
+    if voice_changed:
+        # Cached audio was synthesized with the old voice — drop it so the
+        # new voice takes effect on next play instead of appearing to do nothing
+        remove_chapter_audio({ch.id for ch in novel.chapters})
 
     logger.info("Novel %d settings updated: %s", novel_id,
                 {f: getattr(novel, f) for f in ("voice", "speed", "auto_play", "chapter_sort")})
