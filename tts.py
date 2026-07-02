@@ -9,6 +9,8 @@ import asyncio
 import io
 import logging
 import os
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -110,9 +112,15 @@ def temp_path_for_chapter(chapter_id: int) -> Path:
 _streaming_state: dict[int, dict] = {}
 
 
+def _all_temp_audio_files():
+    """All temp audio artifacts: full WAVs, segment WAVs, HLS AAC segments."""
+    yield from TEMP_DIR.glob("chapter_*.wav")
+    yield from TEMP_DIR.glob("chapter_*.aac")
+
+
 def cleanup_temp_files(keep_ids: set[int]):
     """Remove temp audio files except for the given chapter IDs."""
-    for f in TEMP_DIR.glob("chapter_*.wav"):
+    for f in _all_temp_audio_files():
         try:
             # Parse chapter id from "chapter_123.wav" or "chapter_123_seg_0.wav"
             parts = f.stem.split("_")
@@ -131,7 +139,7 @@ def cleanup_temp_files(keep_ids: set[int]):
 def cleanup_all_temp_files():
     """Remove ALL temp audio files. Called on server startup/shutdown."""
     count = 0
-    for f in TEMP_DIR.glob("chapter_*.wav"):
+    for f in _all_temp_audio_files():
         try:
             f.unlink()
             count += 1
@@ -140,21 +148,6 @@ def cleanup_all_temp_files():
     _streaming_state.clear()
     if count:
         logger.info("Cleaned up %d temp audio file(s)", count)
-
-
-def cleanup_stale_temp_files(max_age_hours: int = 24):
-    """Remove temp audio files older than max_age_hours."""
-    cutoff = time.time() - (max_age_hours * 3600)
-    count = 0
-    for f in TEMP_DIR.glob("chapter_*.wav"):
-        try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-                count += 1
-        except Exception:
-            pass
-    if count:
-        logger.info("Cleaned up %d stale temp file(s) older than %dh", count, max_age_hours)
 
 
 async def synthesize_chapter_to_file(
@@ -211,6 +204,42 @@ def _segment_path(chapter_id: int, index: int) -> Path:
     return TEMP_DIR / f"chapter_{chapter_id}_seg_{index}.wav"
 
 
+def _aac_segment_path(chapter_id: int, index: int) -> Path:
+    """Path for an individual HLS AAC segment file."""
+    return TEMP_DIR / f"chapter_{chapter_id}_seg_{index}.aac"
+
+
+# Inter-segment silence baked into the concatenated full file (see
+# _segments_to_wav_bytes). AAC segments get the same amount of trailing pad so
+# the HLS timeline and the full-file timeline line up for progress save/resume.
+SEGMENT_GAP_SECONDS = 0.3
+
+
+def _encode_segment_aac(chapter_id: int, index: int) -> bool:
+    """
+    Encode a WAV segment to packed ADTS AAC for native HLS playback (iOS).
+    Returns False (and logs) if ffmpeg is unavailable or fails — the WAV
+    segment fallback still works in that case.
+    """
+    wav = _segment_path(chapter_id, index)
+    aac = _aac_segment_path(chapter_id, index)
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(wav),
+        "-af", f"apad=pad_dur={SEGMENT_GAP_SECONDS}",
+        "-c:a", "aac", "-b:a", "96k",
+        str(aac),
+    ]
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=60,
+                       creationflags=creationflags)
+        return True
+    except Exception as e:
+        logger.warning("AAC encode failed for chapter %d seg %d: %s", chapter_id, index, e)
+        return False
+
+
 def _save_segment_wav(chapter_id: int, index: int, audio: np.ndarray) -> float:
     """Save a single segment as a WAV file. Returns duration in seconds."""
     path = _segment_path(chapter_id, index)
@@ -257,6 +286,7 @@ async def synthesize_chapter_streaming(
                 if audio is not None and len(audio) > 0:
                     all_segments.append(audio)
                     dur = _save_segment_wav(chapter_id, seg_index, audio)
+                    _encode_segment_aac(chapter_id, seg_index)
                     st = _streaming_state.get(chapter_id)
                     if st is not None:
                         st["segments"].append(dur)

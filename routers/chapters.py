@@ -6,11 +6,12 @@ Handles chapter listing, audio streaming, and synthesis status.
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 
 import soundfile as sf
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from tts import (
     get_chapter_status, get_streaming_state,
     prefetch_next_chapter, cleanup_temp_files,
     temp_path_for_chapter, _segment_path,
+    _aac_segment_path, SEGMENT_GAP_SECONDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,6 +146,7 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error("Failed to scrape chapter text: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
+    text = f"{chapter.title}\n\n{text}"
 
     # Update word count
     word_count = len(text.split())
@@ -214,6 +217,7 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     # Extract prefetch target info
     prefetch_id = next_chapters[0].id if next_chapters else None
     prefetch_url = next_chapters[0].rr_url if next_chapters else None
+    prefetch_title = next_chapters[0].title if next_chapters else None
 
     async def _after_synthesis():
         """Prefetch next chapter and cleanup old files after synthesis."""
@@ -224,6 +228,7 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
             else:
                 try:
                     nch_text = await prefetch_scraper.scrape_chapter_text(prefetch_url)
+                    nch_text = f"{prefetch_title}\n\n{nch_text}"
                     await prefetch_next_chapter(prefetch_id, nch_text, voice, 1.0)
                 except Exception as e:
                     logger.warning("Prefetch failed for chapter %s: %s", prefetch_id, e)
@@ -244,6 +249,8 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
+    # Announce the chapter title at the start of the audio
+    text = f"{chapter.title}\n\n{text}"
 
     # Update word count
     chapter.word_count = len(text.split())
@@ -294,6 +301,11 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
             segment_durations.append(0.0)
         seg_index += 1
 
+    # Count contiguous HLS AAC segments (encoded alongside the WAVs)
+    aac_count = 0
+    while _aac_segment_path(chapter_id, aac_count).exists():
+        aac_count += 1
+
     # Check if streaming is still in progress via in-memory state
     streaming = get_streaming_state(chapter_id)
     synthesis_complete = file_ready  # full file means definitely complete
@@ -305,6 +317,7 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
         return {
             "segment_count": 0,
             "segment_durations": [],
+            "aac_count": 0,
             "complete": True,
             "total_duration": full_status["duration_seconds"] or 0.0,
             "file_ready": True,
@@ -313,10 +326,69 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
     return {
         "segment_count": seg_index,
         "segment_durations": segment_durations,
+        "aac_count": aac_count,
         "complete": synthesis_complete,
         "total_duration": total_duration,
         "file_ready": file_ready,
     }
+
+
+@router.get("/chapters/{chapter_id}/hls.m3u8")
+async def get_hls_playlist(chapter_id: int, db: Session = Depends(get_db)):
+    """
+    Growing (EVENT) HLS playlist of AAC segments for native iOS playback.
+    Safari re-polls this until #EXT-X-ENDLIST appears, playing segments
+    seamlessly — including with the screen locked.
+    """
+    chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    durations = []
+    idx = 0
+    while _aac_segment_path(chapter_id, idx).exists():
+        wav = _segment_path(chapter_id, idx)
+        try:
+            durations.append(sf.info(str(wav)).duration + SEGMENT_GAP_SECONDS)
+        except Exception:
+            durations.append(SEGMENT_GAP_SECONDS)
+        idx += 1
+
+    if idx == 0:
+        raise HTTPException(status_code=404, detail="No HLS segments yet")
+
+    streaming = get_streaming_state(chapter_id)
+    complete = get_chapter_status(chapter_id)["ready"]
+    if streaming:
+        complete = streaming.get("complete", False)
+
+    lines = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{math.ceil(max(durations)) + 1}",
+        "#EXT-X-MEDIA-SEQUENCE:0",
+        "#EXT-X-PLAYLIST-TYPE:EVENT",
+    ]
+    for i, dur in enumerate(durations):
+        lines.append(f"#EXTINF:{dur:.3f},")
+        lines.append(f"/api/chapters/{chapter_id}/hls/{i}.aac")
+    if complete:
+        lines.append("#EXT-X-ENDLIST")
+
+    return Response(
+        content="\n".join(lines) + "\n",
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/chapters/{chapter_id}/hls/{seg_index}.aac")
+async def get_hls_segment(chapter_id: int, seg_index: int):
+    """Serve a single packed-audio AAC segment for HLS."""
+    path = _aac_segment_path(chapter_id, seg_index)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Segment not ready")
+    return FileResponse(path=str(path), media_type="audio/aac")
 
 
 @router.get("/chapters/{chapter_id}/segments/{seg_index}")

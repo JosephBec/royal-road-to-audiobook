@@ -55,6 +55,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.middleware("http")
+async def no_cache_frontend(request, call_next):
+    """
+    Phone browsers (Safari especially) heuristically cache static assets,
+    serving stale app.js/index.html after updates. no-cache forces ETag
+    revalidation — repeat loads stay cheap on LAN (304s).
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static") or path.endswith(".m3u8"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # Mount API routers
 app.include_router(novels.router)
 app.include_router(chapters.router)
