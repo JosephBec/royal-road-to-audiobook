@@ -941,6 +941,57 @@ function closeSettings() {
     document.getElementById('modal-settings').style.display = 'none';
 }
 
+// ===== Per-Novel Settings =====
+function openNovelSettings() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    const ov = novel.settings || {};
+
+    document.getElementById('ns-novel-name').textContent = novel.title;
+
+    const globalVoiceLabel = state.voices.find(v => v.id === state.settings.voice)?.label || state.settings.voice;
+    document.getElementById('ns-voice').innerHTML =
+        `<option value="">Default (${globalVoiceLabel})</option>` +
+        state.voices.map(v =>
+            `<option value="${v.id}" ${v.id === ov.voice ? 'selected' : ''}>${v.label}</option>`
+        ).join('');
+
+    document.getElementById('ns-speed-value').textContent =
+        ov.speed != null ? `${ov.speed.toFixed(2)}x` : `Default (${state.settings.speed.toFixed(2)}x)`;
+
+    document.getElementById('ns-autoplay').value = ov.auto_play == null ? '' : String(ov.auto_play);
+    document.getElementById('ns-sort').value = ov.chapter_sort ?? '';
+
+    document.getElementById('modal-novel-settings').style.display = 'flex';
+}
+
+function closeNovelSettings() {
+    document.getElementById('modal-novel-settings').style.display = 'none';
+}
+
+async function updateNovelSetting(field, value) {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    try {
+        const result = await api('PATCH', `/api/novels/${novel.id}/settings`, { [field]: value });
+        novel.settings = result.settings;
+        novel.effective_settings = result.effective_settings;
+        // Keep the playing novel's object in sync so playbackSetting() sees it
+        if (state.playback.novel?.id === novel.id) {
+            state.playback.novel.settings = result.settings;
+            state.playback.novel.effective_settings = result.effective_settings;
+            applyPlaybackRate();
+        }
+        if (field === 'chapter_sort') {
+            state.chapterPage = 1;
+            await loadChapters();
+        }
+        openNovelSettings(); // refresh displayed values
+    } catch (e) {
+        showToast('Failed to save: ' + e.message);
+    }
+}
+
 async function updateSetting(key, value) {
     try {
         state.settings = await api('PUT', '/api/settings', { [key]: value });
@@ -979,6 +1030,33 @@ function setupEventListeners() {
     // Novel detail
     document.getElementById('btn-back').addEventListener('click', closeNovel);
     document.getElementById('btn-refresh').addEventListener('click', refreshNovel);
+
+    // Per-novel settings
+    document.getElementById('btn-novel-settings').addEventListener('click', openNovelSettings);
+    document.getElementById('btn-ns-close').addEventListener('click', closeNovelSettings);
+    document.getElementById('modal-novel-settings').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeNovelSettings();
+    });
+    document.getElementById('ns-voice').addEventListener('change', (e) => {
+        updateNovelSetting('voice', e.target.value || null);
+    });
+    document.getElementById('ns-autoplay').addEventListener('change', (e) => {
+        updateNovelSetting('auto_play', e.target.value === '' ? null : e.target.value === 'true');
+    });
+    document.getElementById('ns-sort').addEventListener('change', (e) => {
+        updateNovelSetting('chapter_sort', e.target.value || null);
+    });
+    document.getElementById('ns-speed-down').addEventListener('click', () => {
+        const base = state.currentNovel?.settings?.speed ?? state.settings.speed;
+        updateNovelSetting('speed', Math.max(0.5, Math.round((base - 0.05) * 100) / 100));
+    });
+    document.getElementById('ns-speed-up').addEventListener('click', () => {
+        const base = state.currentNovel?.settings?.speed ?? state.settings.speed;
+        updateNovelSetting('speed', Math.min(2.0, Math.round((base + 0.05) * 100) / 100));
+    });
+    document.getElementById('ns-speed-reset').addEventListener('click', () => {
+        updateNovelSetting('speed', null);
+    });
 
     // Settings
     document.getElementById('btn-settings').addEventListener('click', openSettings);

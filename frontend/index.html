@@ -44,7 +44,10 @@
                         <p id="novel-stats" class="subtitle"></p>
                     </div>
                 </div>
-                <button id="btn-refresh" class="secondary-btn">↻ Refresh</button>
+                <div class="novel-header-actions">
+                    <button id="btn-novel-settings" class="secondary-btn">⚙ Novel</button>
+                    <button id="btn-refresh" class="secondary-btn">↻ Refresh</button>
+                </div>
             </div>
             <button id="btn-resume" class="primary-btn resume-btn" style="display:none;"></button>
             <div id="novel-description" class="novel-description"></div>
@@ -140,6 +143,46 @@
             </div>
             <div class="modal-actions">
                 <button id="btn-settings-close" class="primary-btn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Per-Novel Settings Modal -->
+    <div id="modal-novel-settings" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Novel Settings</h3>
+            <p id="ns-novel-name"></p>
+            <div class="setting-row">
+                <label for="ns-voice">Voice</label>
+                <select id="ns-voice"></select>
+            </div>
+            <div class="setting-row">
+                <label>Speed</label>
+                <div class="speed-control">
+                    <button id="ns-speed-down" class="small-btn">−</button>
+                    <span id="ns-speed-value">Default</span>
+                    <button id="ns-speed-up" class="small-btn">+</button>
+                    <button id="ns-speed-reset" class="small-btn" title="Use default">↺</button>
+                </div>
+            </div>
+            <div class="setting-row">
+                <label for="ns-autoplay">Auto-play Next Chapter</label>
+                <select id="ns-autoplay">
+                    <option value="">Default</option>
+                    <option value="true">On</option>
+                    <option value="false">Off</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label for="ns-sort">Chapter Sort Order</label>
+                <select id="ns-sort">
+                    <option value="">Default</option>
+                    <option value="asc">Oldest first (1, 2, 3...)</option>
+                    <option value="desc">Newest first</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="btn-ns-close" class="primary-btn">Done</button>
             </div>
         </div>
     </div>
