@@ -9,6 +9,9 @@ Add novels by URL, browse chapters, and listen with real-time audio synthesis on
 ## Features
 
 - **Royal Road integration** — Add novels by URL, automatically scrapes metadata, cover art, and chapter lists
+- **Pluggable scrapers** — Drop a new `.py` file in `scrapers/` to support additional sites (see below)
+- **Per-novel settings** — Override voice, speed, auto-play, and chapter sort order for individual novels
+- **Resume** — One-click resume from the novel page or the library card badge
 - **GPU-accelerated TTS** — Kokoro-82M with CUDA for fast synthesis (~30x realtime on RTX 2070)
 - **Streaming playback** — Start listening within seconds (Mode A) or wait for full synthesis (Mode B)
 - **Progress tracking** — Saves chapter + position automatically, persists across devices and restarts
@@ -105,6 +108,20 @@ Click the ⚙️ gear icon to configure:
   - **Wait for File** (default) — Synthesizes the full chapter before playing. Short wait (~30-60s for long chapters), but reliable background playback on mobile.
   - **Instant Play** — Streams audio as it's synthesized. Starts playing within seconds but may have issues with mobile background playback.
 - **Auto-play** — Automatically advance to the next chapter when the current one ends
+- **Chapter Sort Order** — Oldest-first or newest-first chapter lists
+
+### Per-Novel Settings
+
+On a novel's detail page, click **⚙ Novel** to override voice, speed, auto-play, or
+chapter sort order for that novel only. Each control has a "Default" option that
+falls back to the global setting; overrides apply immediately, including to the
+chapter currently playing.
+
+### Resume
+
+If a novel has saved progress, its detail page shows a **▶ Resume** button with the
+chapter and timestamp, and its library card badge (▶ Ch. N) becomes a one-click
+resume shortcut.
 
 ### Accessing from Phone
 
@@ -152,7 +169,10 @@ royal-road-to-audiobook/
 ├── main.py              # FastAPI entry point + server startup
 ├── config.yaml          # Voice configuration
 ├── database.py          # SQLAlchemy models + SQLite
-├── scraper.py           # Royal Road scraper
+├── scrapers/
+│   ├── __init__.py      # Scraper registry (auto-discovers site modules)
+│   ├── base.py          # BaseScraper interface + shared HTTP helpers
+│   └── royalroad.py     # Royal Road scraper
 ├── tts.py               # Kokoro TTS wrapper + streaming + temp files
 ├── routers/
 │   ├── novels.py        # Novel CRUD + refresh
@@ -207,8 +227,40 @@ Place a shortcut to this file in your Windows Startup folder (`shell:startup`).
 | PUT | `/api/progress/{novel_id}` | Update reading progress |
 | GET | `/api/settings` | Get app settings |
 | PUT | `/api/settings` | Update app settings |
+| PATCH | `/api/novels/{id}/settings` | Set/clear per-novel overrides (null = inherit) |
 | GET | `/api/voices` | List available voices |
 | GET | `/` | Serve frontend |
+
+## Adding a Scraper for Another Site
+
+Scrapers live in `scrapers/` and are auto-discovered at startup — no registration
+code needed. Create `scrapers/mysite.py` with a `BaseScraper` subclass:
+
+```python
+import re
+from scrapers.base import BaseScraper
+
+class MySiteScraper(BaseScraper):
+    name = "My Site"
+    url_patterns = [re.compile(r"https?://(?:www\.)?mysite\.com/novel/\d+")]
+
+    async def scrape_novel_metadata(self, url: str) -> dict:
+        # return {"title", "author", "cover_url", "description", "rr_url"(canonical URL)}
+        ...
+
+    async def scrape_chapter_list(self, novel_url: str) -> list[dict]:
+        # return [{"title", "rr_url"(chapter URL), "rr_chapter_id", "order", "published_at"}]
+        ...
+
+    async def scrape_chapter_text(self, chapter_url: str) -> str:
+        # return plain text, paragraphs separated by blank lines
+        ...
+```
+
+Use `self._rate_limited_get(client, url)` for polite 1 req/sec fetching (see
+`scrapers/royalroad.py` for a complete example). Restart the server and novels
+from that site can be added by URL. A broken scraper file is logged and skipped;
+it won't take the app down.
 
 ## Troubleshooting
 
