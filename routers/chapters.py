@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, Novel, Chapter, Settings, Progress
-from scraper import scrape_chapter_text
+from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
     get_chapter_status, get_streaming_state,
@@ -23,6 +23,17 @@ from tts import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chapters"])
+
+
+def _scraper_for(url: str):
+    """Resolve the scraper for a stored chapter/novel URL or raise 400."""
+    scraper = get_scraper_for_url(url)
+    if not scraper:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No scraper supports this URL. Supported sites: {', '.join(supported_sites())}",
+        )
+    return scraper
 
 
 class ChapterResponse(BaseModel):
@@ -124,7 +135,9 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
     # Scrape chapter text if not cached
     try:
-        text = await scrape_chapter_text(chapter.rr_url)
+        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to scrape chapter text: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
@@ -179,7 +192,9 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
 
     # Scrape text
     try:
-        text = await scrape_chapter_text(chapter.rr_url)
+        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
 
@@ -219,11 +234,15 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     async def _after_synthesis():
         """Prefetch next chapter and cleanup old files after synthesis."""
         if prefetch_id and prefetch_url:
-            try:
-                nch_text = await scrape_chapter_text(prefetch_url)
-                await prefetch_next_chapter(prefetch_id, nch_text, voice, 1.0)
-            except Exception:
-                pass
+            prefetch_scraper = get_scraper_for_url(prefetch_url)
+            if not prefetch_scraper:
+                logger.warning("No scraper for prefetch URL, skipping: %s", prefetch_url)
+            else:
+                try:
+                    nch_text = await prefetch_scraper.scrape_chapter_text(prefetch_url)
+                    await prefetch_next_chapter(prefetch_id, nch_text, voice, 1.0)
+                except Exception as e:
+                    logger.warning("Prefetch failed for chapter %s: %s", prefetch_id, e)
         cleanup_temp_files(keep_ids)
 
     if playback_mode == "instant":

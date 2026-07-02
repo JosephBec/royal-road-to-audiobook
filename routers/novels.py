@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, Novel, Chapter, Progress
-from scraper import scrape_novel_metadata, scrape_chapter_list
+from scrapers import get_scraper_for_url, supported_sites
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/novels", tags=["novels"])
@@ -77,14 +77,20 @@ async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
         Novel.rr_url == req.url.rstrip("/")
     ).first()
 
-    # Normalize URL check
+    scraper = get_scraper_for_url(req.url)
+    if not scraper:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No scraper supports this URL. Supported sites: {', '.join(supported_sites())}",
+        )
+
     try:
-        metadata = await scrape_novel_metadata(req.url)
+        metadata = await scraper.scrape_novel_metadata(req.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Failed to scrape novel: %s", e)
-        raise HTTPException(status_code=502, detail=f"Failed to scrape Royal Road: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to scrape {scraper.name}: {e}")
 
     existing = db.query(Novel).filter(Novel.rr_url == metadata["rr_url"]).first()
     if existing:
@@ -103,7 +109,7 @@ async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
 
     # Scrape chapters
     try:
-        chapter_list = await scrape_chapter_list(metadata["rr_url"])
+        chapter_list = await scraper.scrape_chapter_list(metadata["rr_url"])
     except Exception as e:
         logger.error("Failed to scrape chapters: %s", e)
         chapter_list = []
@@ -158,8 +164,15 @@ async def refresh_novel(novel_id: int, db: Session = Depends(get_db)):
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
 
+    scraper = get_scraper_for_url(novel.rr_url)
+    if not scraper:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No scraper supports this novel's URL. Supported sites: {', '.join(supported_sites())}",
+        )
+
     try:
-        chapter_list = await scrape_chapter_list(novel.rr_url)
+        chapter_list = await scraper.scrape_chapter_list(novel.rr_url)
     except Exception as e:
         logger.error("Failed to refresh chapters: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to scrape: {e}")
