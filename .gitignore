@@ -33,3 +33,6 @@ server.log
 # Audio output
 *.wav
 *.mp3
+.superpowers/
+
+export_jobs/
