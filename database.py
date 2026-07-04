@@ -4,6 +4,7 @@ Database models and session management.
 SQLite database with SQLAlchemy ORM for novels, chapters, progress, and settings.
 """
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -17,7 +18,7 @@ from sqlalchemy.orm import (
 )
 
 
-DATABASE_URL = "sqlite:///./data.db"
+DATABASE_URL = os.environ.get("NOVEL_TTS_DB", "sqlite:///./data.db")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -66,6 +67,7 @@ class Chapter(Base):
     word_count = Column(Integer, default=0)
     published_at = Column(DateTime, nullable=True)
     fetched_at = Column(DateTime, nullable=True)
+    text = Column(Text, nullable=True)  # scraped chapter text cache (scrape once, ever)
 
     novel = relationship("Novel", back_populates="chapters")
 
@@ -97,24 +99,61 @@ class Settings(Base):
     auto_play = Column(Boolean, default=True)
     theme = Column(String, default="dark")  # "dark" or "light"
     chapter_sort = Column(String, default="asc")  # "asc" or "desc"
+    audiobook_dir = Column(Text, nullable=False, default=r"E:\Plex\Audiobooks\Audiobooks")
+    plex_url = Column(Text, nullable=False, default="")
+    plex_token = Column(Text, nullable=False, default="")
+    plex_section_id = Column(Text, nullable=False, default="")
+
+
+class ExportJob(Base):
+    __tablename__ = "export_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    novel_title = Column(Text, nullable=False)   # snapshot: job survives novel edits
+    author = Column(Text, default="Unknown")
+    start_order = Column(Integer, nullable=False)
+    end_order = Column(Integer, nullable=False)
+    voice = Column(String, nullable=False)
+    speed = Column(Float, nullable=False)
+    status = Column(String, nullable=False, default="queued")
+    chapters_done = Column(Integer, default=0)
+    chapters_total = Column(Integer, default=0)
+    detail = Column(Text, default="")
+    output_path = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime, nullable=True)
 
 
 def _migrate_schema():
     """Add columns introduced after initial release (SQLite has no Alembic here)."""
     inspector = sa_inspect(engine)
-    existing = {c["name"] for c in inspector.get_columns("novels")}
-    new_columns = {
-        "voice": "TEXT",
-        "speed": "FLOAT",
-        "auto_play": "BOOLEAN",
-        "chapter_sort": "TEXT",
-        "favorite": "BOOLEAN NOT NULL DEFAULT 0",
-        "sort_order": "INTEGER",
+    table_columns = {
+        "novels": {
+            "voice": "TEXT",
+            "speed": "FLOAT",
+            "auto_play": "BOOLEAN",
+            "chapter_sort": "TEXT",
+            "favorite": "BOOLEAN NOT NULL DEFAULT 0",
+            "sort_order": "INTEGER",
+        },
+        "chapters": {
+            "text": "TEXT",
+        },
+        "settings": {
+            "audiobook_dir": "TEXT NOT NULL DEFAULT 'E:\\Plex\\Audiobooks\\Audiobooks'",
+            "plex_url": "TEXT NOT NULL DEFAULT ''",
+            "plex_token": "TEXT NOT NULL DEFAULT ''",
+            "plex_section_id": "TEXT NOT NULL DEFAULT ''",
+        },
     }
     with engine.begin() as conn:
-        for name, ddl_type in new_columns.items():
-            if name not in existing:
-                conn.execute(text(f"ALTER TABLE novels ADD COLUMN {name} {ddl_type}"))
+        for table, new_columns in table_columns.items():
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for name, ddl_type in new_columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
 
 
 def effective_settings(novel: "Novel", settings: "Settings") -> dict:
