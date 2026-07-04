@@ -82,6 +82,10 @@ Assembly (after all chapters):
    If target filename exists, overwrite (same range re-export = intentional).
 8. Plex: `GET {plex_url}/library/sections/{plex_section_id}/refresh?X-Plex-Token=…`
    (10s timeout). Failure is **non-fatal**: job completes with warning in `detail`.
+   Connection refused / timeout (e.g. the Docker engine hosting Plex is down) gets a
+   distinct message: "Audiobook saved, but Plex is unreachable (is Docker running?) —
+   it will appear after the next library scan." Same distinction in the CLI flag and
+   in the settings "Test" action.
 9. Delete job dir; mark `completed`.
 
 ## D. Priority: `_wait_for_export_turn()`
