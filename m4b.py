@@ -49,3 +49,80 @@ def ffmetadata_content(chapters: list) -> str:
         ]
         t_ms = end_ms
     return "\n".join(lines)
+
+
+def _ffmpeg() -> str:
+    path = shutil.which("ffmpeg")
+    if path is None:
+        raise RuntimeError("ffmpeg not found on PATH — required for M4B export.")
+    return path
+
+
+def _run(cmd: list, timeout: int, what: str):
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(f"{what} failed: {result.stderr[-2000:]}")
+
+
+def assemble_m4b(
+    chapter_wavs: list,
+    out_path: Path,
+    *,
+    book_title: str,
+    author: str,
+    cover_bytes: bytes | None = None,
+    cover_ext: str = "jpg",
+    bitrate: str = "64k",
+) -> Path:
+    """Concatenate chapter WAVs and encode a chaptered M4B. Blocking."""
+    ffmpeg = _ffmpeg()
+    out_path = Path(out_path)
+    workdir = out_path.parent
+
+    durations = [(title, sf.info(str(wav)).duration) for title, wav in chapter_wavs]
+    total = sum(d for _, d in durations)
+
+    concat_list = workdir / "concat_list.txt"
+    concat_list.write_text(
+        "".join(f"file '{str(wav).replace(chr(39), chr(39) + chr(92) + chr(39) * 2)}'\n"
+                for _, wav in chapter_wavs),
+        encoding="utf-8")
+
+    metadata_path = workdir / "metadata.txt"
+    metadata_path.write_text(ffmetadata_content(durations), encoding="utf-8")
+
+    combined = workdir / "combined.wav"
+    _run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+          "-c", "copy", str(combined)],
+         timeout=max(600, int(total * 0.5) + 600), what="WAV concat")
+
+    cover_path = None
+    if cover_bytes:
+        cover_path = workdir / f"cover.{cover_ext}"
+        cover_path.write_bytes(cover_bytes)
+
+    cmd = [ffmpeg, "-y", "-i", str(combined), "-i", str(metadata_path)]
+    if cover_path:
+        cmd += ["-i", str(cover_path),
+                "-map", "0:a", "-map", "2:v", "-map_metadata", "1",
+                "-c:a", "aac", "-b:a", bitrate, "-ar", "24000", "-ac", "1",
+                "-c:v", "copy", "-disposition:v", "attached_pic"]
+    else:
+        cmd += ["-map_metadata", "1",
+                "-c:a", "aac", "-b:a", bitrate, "-ar", "24000", "-ac", "1"]
+    cmd += ["-metadata", f"title={book_title}",
+            "-metadata", f"artist={author}",
+            "-metadata", f"album={book_title}",
+            "-metadata", "genre=Audiobook",
+            "-f", "mp4", str(out_path)]
+    _run(cmd, timeout=max(1200, int(total) + 1200), what="M4B encode")
+
+    combined.unlink(missing_ok=True)
+    concat_list.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
+    if cover_path:
+        cover_path.unlink(missing_ok=True)
+
+    logger.info("M4B assembled: %s (%.1f min)", out_path, total / 60)
+    return out_path
