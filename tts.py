@@ -218,6 +218,19 @@ async def synthesize_chapter_to_file(
     return output_path
 
 
+async def synthesize_batch(text: str, voice: str, speed: float) -> list[np.ndarray]:
+    """Synthesize one export batch on the shared TTS worker.
+
+    Deliberately one small executor job: exports call this per ~600-word
+    batch and yield between calls, keeping worst-case playback latency to
+    a single batch. (A future parallel export lane replaces this seam.)
+    """
+    pipeline = await get_pipeline(voice)
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor, _synthesize_text_blocking, pipeline, text, voice, speed
+    )
+
 
 # ===== Segment-based streaming for Instant Play mode =====
 
