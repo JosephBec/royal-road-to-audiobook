@@ -43,6 +43,21 @@ def _scraper_for(url: str):
     return scraper
 
 
+async def get_chapter_text(chapter: Chapter, db: Session) -> str:
+    """Return chapter body text, scraping and caching it on first use.
+
+    Stored text is the raw scraped body (no title announcement).
+    """
+    if chapter.text:
+        return chapter.text
+    text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+    chapter.text = text
+    chapter.word_count = len(text.split())
+    chapter.fetched_at = datetime.now(timezone.utc)
+    db.commit()
+    return text
+
+
 class ChapterResponse(BaseModel):
     id: int
     novel_id: int
@@ -143,20 +158,13 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
     # Scrape chapter text if not cached
     try:
-        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+        text = await get_chapter_text(chapter, db)
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Failed to scrape chapter text: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
     text = f"{chapter.title}\n\n{text}"
-
-    # Update word count
-    word_count = len(text.split())
-    if chapter.word_count != word_count:
-        chapter.word_count = word_count
-        chapter.fetched_at = datetime.now(timezone.utc)
-        db.commit()
 
     # Synthesize full file then serve (speed=1.0, playback speed is client-side)
     with interactive_synthesis():
@@ -231,15 +239,17 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
         for pf_id, pf_url, pf_title in prefetch_targets:
             if temp_path_for_chapter(pf_id).exists():
                 continue
-            pf_scraper = get_scraper_for_url(pf_url)
-            if not pf_scraper:
-                logger.warning("No scraper for prefetch URL, skipping: %s", pf_url)
-                continue
+            db2 = SessionLocal()
             try:
-                pf_text = await pf_scraper.scrape_chapter_text(pf_url)
+                pf_chapter = db2.query(Chapter).filter(Chapter.id == pf_id).first()
+                if not pf_chapter:
+                    continue
+                pf_text = await get_chapter_text(pf_chapter, db2)
                 await synthesize_chapter_to_file(pf_id, f"{pf_title}\n\n{pf_text}", voice, 1.0)
             except Exception as e:
                 logger.warning("Prefetch failed for chapter %s: %s", pf_id, e)
+            finally:
+                db2.close()
         db2 = SessionLocal()
         try:
             forever, expiring = retention_policy(db2)
@@ -258,18 +268,13 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
 
     # Scrape text
     try:
-        text = await _scraper_for(chapter.rr_url).scrape_chapter_text(chapter.rr_url)
+        text = await get_chapter_text(chapter, db)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
     # Announce the chapter title at the start of the audio
     text = f"{chapter.title}\n\n{text}"
-
-    # Update word count
-    chapter.word_count = len(text.split())
-    chapter.fetched_at = datetime.now(timezone.utc)
-    db.commit()
 
     if playback_mode == "instant":
         async def _run_streaming():
