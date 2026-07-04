@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from m4b import assemble_m4b
@@ -31,3 +32,19 @@ def test_assemble_produces_chaptered_m4b(tmp_path):
     assert titles == ["Ch One", "Ch Two"]
     assert abs(float(data["format"]["duration"]) - 2.5) < 0.2
     assert data["format"]["tags"].get("title") == "Test Book"
+
+
+def test_assemble_failure_raises_and_cleans_up(tmp_path):
+    w1 = tmp_path / "c1.wav"
+    _sine_wav(w1, 1.0, 440)
+    out = tmp_path / "book.m4b"
+
+    with pytest.raises(RuntimeError, match="M4B encode failed"):
+        assemble_m4b([("Ch One", w1)], out,
+                     book_title="Test Book", author="Tester",
+                     bitrate="not-a-bitrate")
+
+    assert not out.exists()
+    assert not (tmp_path / "combined.wav").exists()
+    assert not (tmp_path / "concat_list.txt").exists()
+    assert not (tmp_path / "metadata.txt").exists()
