@@ -251,6 +251,7 @@ async def delete_novel(novel_id: int, db: Session = Depends(get_db)):
         if job.status == "queued":
             job.status = "canceled"
             job.detail = "novel deleted"
+            job.finished_at = datetime.now(timezone.utc)
 
     db.delete(novel)
     db.commit()

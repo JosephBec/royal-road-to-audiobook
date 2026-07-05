@@ -80,3 +80,72 @@ def test_settings_roundtrip_new_fields(client):
 def test_plex_libraries_unconfigured(client):
     client.put("/api/settings", json={"plex_url": "", "plex_token": ""})
     assert client.get("/api/plex/libraries").status_code == 400
+
+
+def test_unknown_novel_404(client):
+    resp = client.post("/api/novels/999999/export",
+                       json={"start_order": 1, "end_order": 2,
+                             "voice": "af_heart", "speed": 1.0})
+    assert resp.status_code == 404
+
+
+def test_bad_speed_and_empty_voice_rejected(client, novel_with_chapters):
+    resp = client.post(f"/api/novels/{novel_with_chapters}/export",
+                       json={"start_order": 1, "end_order": 2,
+                             "voice": "af_heart", "speed": 3.0})
+    assert resp.status_code == 400
+    resp = client.post(f"/api/novels/{novel_with_chapters}/export",
+                       json={"start_order": 1, "end_order": 2,
+                             "voice": "", "speed": 1.0})
+    assert resp.status_code == 400
+
+
+def test_unset_audiobook_dir_rejected(client, novel_with_chapters):
+    original = client.get("/api/settings").json()["audiobook_dir"]
+    try:
+        assert client.put("/api/settings", json={"audiobook_dir": ""}).status_code == 200
+        resp = client.post(f"/api/novels/{novel_with_chapters}/export",
+                           json={"start_order": 1, "end_order": 2,
+                                 "voice": "af_heart", "speed": 1.0})
+        assert resp.status_code == 400
+    finally:
+        client.put("/api/settings", json={"audiobook_dir": original})
+
+
+def test_cancel_completed_job_rejected(client, novel_with_chapters):
+    job_id = client.post(f"/api/novels/{novel_with_chapters}/export",
+                         json={"start_order": 1, "end_order": 2,
+                               "voice": "af_heart", "speed": 1.0}).json()["job_id"]
+    assert client.post(f"/api/exports/{job_id}/cancel").json()["status"] == "canceled"
+    assert client.post(f"/api/exports/{job_id}/cancel").status_code == 400
+
+
+def test_retry_queued_job_rejected(client, novel_with_chapters):
+    job_id = client.post(f"/api/novels/{novel_with_chapters}/export",
+                         json={"start_order": 1, "end_order": 2,
+                               "voice": "af_heart", "speed": 1.0}).json()["job_id"]
+    assert client.post(f"/api/exports/{job_id}/retry").status_code == 400
+
+
+def test_plex_libraries_unreachable_503(client, monkeypatch):
+    import plex
+    from routers import exports as exports_module
+
+    async def raiser(url, token):
+        raise plex.PlexUnreachable(plex.PLEX_UNREACHABLE_MSG)
+
+    monkeypatch.setattr(exports_module.plex, "list_libraries", raiser)
+    client.put("/api/settings", json={"plex_url": "http://localhost:32400",
+                                      "plex_token": "tok"})
+    try:
+        resp = client.get("/api/plex/libraries")
+        assert resp.status_code == 503
+        assert resp.json()["detail"] == plex.PLEX_UNREACHABLE_MSG
+    finally:
+        client.put("/api/settings", json={"plex_url": "", "plex_token": ""})
+
+
+def test_settings_plex_url_rstrip(client):
+    client.put("/api/settings", json={"plex_url": "http://localhost:32400/"})
+    assert client.get("/api/settings").json()["plex_url"] == "http://localhost:32400"
+    client.put("/api/settings", json={"plex_url": ""})
