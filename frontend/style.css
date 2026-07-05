@@ -523,6 +523,43 @@ a:hover { color: var(--accent-hover); }
 .unread-count { color: var(--accent); font-weight: 600; }
 .novel-row-meta .unread-count { font-size: 0.8rem; white-space: nowrap; }
 
+/* Card view: unread count as a badge over the cover's bottom-left */
+.novel-card-cover-wrap { position: relative; }
+.unread-blob {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+    z-index: 1;
+}
+
+/* Supported-sites modal */
+.scraper-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+.scraper-pattern {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
 .novel-info {
     display: flex;
     gap: 16px;

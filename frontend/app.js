@@ -204,15 +204,18 @@ function novelCardHtml(novel) {
         <div class="novel-card" data-id="${novel.id}">
             <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
             <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
-            ${novel.cover_url
-                ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy" draggable="false">`
-                : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
-            }
+            <div class="novel-card-cover-wrap">
+                ${novel.cover_url
+                    ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy" draggable="false">`
+                    : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
+                }
+                ${unread > 0 ? `<span class="unread-blob" title="${unread} unread chapters">${unread > 99 ? '99+' : unread}</span>` : ''}
+            </div>
             <div class="novel-card-body">
                 <div class="novel-card-title">${escapeHtml(novel.title)}</div>
                 <div class="novel-card-author">${escapeHtml(novel.author)}</div>
                 <div class="novel-card-progress">
-                    <span>${novel.total_chapters} chapters${unread > 0 ? ` · <span class="unread-count">${unread} unread</span>` : ''}</span>
+                    <span>${novel.total_chapters} chapters</span>
                     ${novel.progress_chapter
                         ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                         : ''
@@ -308,6 +311,32 @@ function renderLibrary() {
             }
         });
     });
+}
+
+// ===== Supported sites =====
+async function openScrapersModal() {
+    document.getElementById('modal-scrapers').style.display = 'flex';
+    const el = document.getElementById('scraper-list');
+    el.innerHTML = '<p class="hint">Loading…</p>';
+    try {
+        const data = await api('GET', '/api/scrapers');
+        const scrapers = data.scrapers || [];
+        el.innerHTML = scrapers.length
+            ? scrapers.map(s => `
+                <div class="scraper-row">
+                    <strong>${escapeHtml(s.name)}</strong>
+                    ${s.patterns && s.patterns.length
+                        ? `<code class="scraper-pattern">${escapeHtml(s.patterns[0])}</code>`
+                        : ''}
+                </div>`).join('')
+            : '<p class="hint">No scrapers installed — the app can\'t fetch from any site yet. Add one (below) to get started.</p>';
+    } catch (e) {
+        el.innerHTML = `<p class="hint">Failed to load scrapers: ${escapeHtml(e.message)}</p>`;
+    }
+}
+
+function closeScrapersModal() {
+    document.getElementById('modal-scrapers').style.display = 'none';
 }
 
 // ===== Add Novel =====
@@ -1831,6 +1860,14 @@ function setupEventListeners() {
         const descEl = document.getElementById('novel-description');
         const clamped = descEl.classList.toggle('clamped');
         document.getElementById('desc-toggle').textContent = clamped ? 'Read more' : 'Show less';
+    });
+    document.getElementById('link-supported-sites').addEventListener('click', (e) => {
+        e.preventDefault();
+        openScrapersModal();
+    });
+    document.getElementById('btn-scrapers-close').addEventListener('click', closeScrapersModal);
+    document.getElementById('modal-scrapers').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeScrapersModal();
     });
     document.getElementById('modal-export').addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeExportModal();

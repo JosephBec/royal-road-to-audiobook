@@ -116,6 +116,16 @@ async def refresh_favorites():
     return library_sync.start_refresh()
 
 
+@app.get("/api/scrapers")
+async def list_scrapers():
+    """Supported sites, straight from the scraper registry — never hardcoded."""
+    from scrapers import discover_scrapers
+    return {"scrapers": [
+        {"name": s.name, "patterns": [p.pattern for p in s.url_patterns]}
+        for s in discover_scrapers()
+    ]}
+
+
 @app.get("/api/library/sync-status")
 async def library_sync_status():
     """Whether the favorites sync is still running — the frontend polls this

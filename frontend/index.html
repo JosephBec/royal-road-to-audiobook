@@ -108,18 +108,33 @@
         </div>
     </footer>
 
+    <!-- Supported Sites Modal -->
+    <div id="modal-scrapers" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Supported Sites</h3>
+            <div id="scraper-list"><p class="hint">Loading…</p></div>
+            <p class="hint">Want another site? <strong>Add a new scraper:</strong> drop a
+                <code>&lt;site&gt;.py</code> with a <code>BaseScraper</code> subclass into the
+                <code>scrapers/</code> folder (the README has a template) and restart the
+                server — it's discovered automatically.</p>
+            <div class="modal-actions">
+                <button id="btn-scrapers-close" class="secondary-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Novel Modal -->
     <div id="modal-add" class="modal" style="display:none;">
         <div class="modal-content">
             <h3>Add Novel</h3>
-            <p>Paste a novel URL (Royal Road or Ranobes):</p>
-            <input type="text" id="input-novel-url" placeholder="https://www.royalroad.com/fiction/... or https://ranobes.net/novels/..." autocomplete="off">
+            <p>Paste a novel URL. <a href="#" id="link-supported-sites">Check the supported sites</a></p>
+            <input type="text" id="input-novel-url" placeholder="https://..." autocomplete="off">
             <div id="add-error" class="error-msg" style="display:none;"></div>
             <div class="modal-actions">
                 <button id="btn-add-cancel" class="secondary-btn">Cancel</button>
                 <button id="btn-add-confirm" class="primary-btn">Add Novel</button>
             </div>
-            <div id="add-loading" class="loading-indicator" style="display:none;">Scraping Royal Road...</div>
+            <div id="add-loading" class="loading-indicator" style="display:none;">Fetching novel info...</div>
         </div>
     </div>
 
