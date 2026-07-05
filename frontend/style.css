@@ -227,11 +227,22 @@ a:hover { color: var(--accent-hover); }
     width: 30px;
     height: 30px;
     font-size: 1rem;
+    color: #fff; /* white outline star — black blended into the circle */
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 2;
+}
+/* Unfavorited: hidden until you hover the card (desktop). On touch there is
+   no hover — favorite from the novel detail page instead. Favorited stars
+   always show so the library reads at a glance. */
+@media (hover: hover) {
+    .novel-card-fav:not(.is-fav) { opacity: 0; transition: opacity 0.12s; }
+    .novel-card:hover .novel-card-fav:not(.is-fav) { opacity: 1; }
+}
+@media (hover: none) {
+    .novel-card-fav:not(.is-fav) { display: none; }
 }
 
 .novel-card.dragging {
@@ -349,8 +360,26 @@ a:hover { color: var(--accent-hover); }
     width: auto;
     height: auto;
 }
+.novel-card--row .novel-card-fav { color: var(--text-primary); }
 .novel-card--row .novel-card-delete { display: none; }
 .novel-card--row:hover .novel-card-delete { display: flex; }
+
+/* ===== Settings tabs + voice demos ===== */
+.settings-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.voice-demo-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+.voice-demo-label { flex: 1; min-width: 0; font-size: 0.95rem; }
+.voice-current { color: var(--accent); font-size: 0.8em; font-weight: 600; }
 
 .novel-card-body {
     padding: 16px;
@@ -940,6 +969,10 @@ a:hover { color: var(--accent-hover); }
 @media (max-width: 600px) {
     #app { padding: 16px; }
     .novel-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+    /* Keep labels like "Playback Mode" on one line; the select shrinks instead */
+    .setting-row { gap: 10px; }
+    .setting-row label { flex-shrink: 0; }
+    .setting-row select { max-width: 52%; min-width: 0; text-overflow: ellipsis; }
     .novel-header { flex-direction: column; }
     .novel-info { flex-direction: column; align-items: center; text-align: center; }
     #mini-player { padding: 6px 12px; }

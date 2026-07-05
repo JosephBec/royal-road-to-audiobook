@@ -173,7 +173,7 @@ function applyLibraryView() {
 function novelCardHtml(novel) {
     return `
         <div class="novel-card" data-id="${novel.id}">
-            <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+            <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
             <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             ${novel.cover_url
                 ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy" draggable="false">`
@@ -210,7 +210,7 @@ function novelRowHtml(novel) {
                     ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                     : `<span class="novel-row-chapters">${novel.total_chapters} chs</span>`
                 }
-                <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+                <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
                 <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             </div>
         </div>
@@ -1181,6 +1181,76 @@ function openSettings() {
     sec.innerHTML = state.settings.plex_section_id
         ? `<option value="${escapeHtml(state.settings.plex_section_id)}" selected>Library #${escapeHtml(state.settings.plex_section_id)} (saved)</option>`
         : '<option value="">— load libraries first —</option>';
+
+    switchSettingsTab('playback');
+    renderVoiceDemoList();
+}
+
+function switchSettingsTab(name) {
+    document.querySelectorAll('.settings-tab').forEach(btn =>
+        btn.classList.toggle('active', btn.dataset.tab === name));
+    ['playback', 'export', 'voices'].forEach(tab => {
+        document.getElementById(`settings-panel-${tab}`).style.display = tab === name ? '' : 'none';
+    });
+}
+
+// ===== Voice demos =====
+let demoAudio = null;
+
+function renderVoiceDemoList() {
+    const el = document.getElementById('voice-demo-list');
+    el.innerHTML = state.voices.map(v => `
+        <div class="voice-demo-row">
+            <button class="small-btn voice-demo-play" data-voice="${escapeHtml(v.id)}" title="Play demo">▶</button>
+            <span class="voice-demo-label">${escapeHtml(v.label)}${v.id === state.settings.voice ? ' <span class="voice-current">✓ current</span>' : ''}</span>
+            <button class="secondary-btn btn-small voice-demo-use" data-voice="${escapeHtml(v.id)}">Use</button>
+        </div>`).join('');
+
+    el.querySelectorAll('.voice-demo-play').forEach(btn =>
+        btn.addEventListener('click', () => playVoiceDemo(btn)));
+    el.querySelectorAll('.voice-demo-use').forEach(btn =>
+        btn.addEventListener('click', async () => {
+            await updateSetting('voice', btn.dataset.voice);
+            renderVoiceDemoList();
+        }));
+}
+
+function stopVoiceDemo() {
+    if (demoAudio) {
+        demoAudio.pause();
+        demoAudio = null;
+    }
+    document.querySelectorAll('.voice-demo-play').forEach(b => {
+        b.textContent = '▶';
+        b.disabled = false;
+    });
+}
+
+async function playVoiceDemo(btn) {
+    const wasPlaying = btn.textContent === '■';
+    stopVoiceDemo();
+    if (wasPlaying) return; // toggled off
+
+    btn.textContent = '…'; // generating/loading
+    const audio = new Audio(`/api/voices/${encodeURIComponent(btn.dataset.voice)}/demo`);
+    demoAudio = audio;
+    audio.addEventListener('playing', () => {
+        if (demoAudio === audio) btn.textContent = '■';
+    });
+    audio.addEventListener('ended', () => {
+        if (demoAudio === audio) stopVoiceDemo();
+    });
+    audio.addEventListener('error', () => {
+        if (demoAudio === audio) {
+            stopVoiceDemo();
+            showToast('Demo failed to load', 4000);
+        }
+    });
+    try {
+        await audio.play();
+    } catch (e) {
+        if (demoAudio === audio) stopVoiceDemo();
+    }
 }
 
 async function loadPlexLibraries() {
@@ -1201,6 +1271,7 @@ function applyPlaybackRate() {
 }
 
 function closeSettings() {
+    stopVoiceDemo();
     document.getElementById('modal-settings').style.display = 'none';
 }
 
@@ -1392,8 +1463,23 @@ function openExportModal() {
         showToast('Set your audiobook folder in Settings first', 5000);
         return;
     }
-    document.getElementById('export-start').value = 1;
-    document.getElementById('export-end').value = novel.total_chapters || 1;
+    const startSel = document.getElementById('export-start');
+    const endSel = document.getElementById('export-end');
+    startSel.innerHTML = endSel.innerHTML = '<option value="">Loading chapters…</option>';
+    startSel.disabled = endSel.disabled = true;
+    api('GET', `/api/novels/${novel.id}/chapters?page=1&per_page=10000`).then(data => {
+        if (state.currentNovel?.id !== novel.id) return; // modal context changed
+        const chs = (data.chapters || []).slice().sort((a, b) => a.order - b.order);
+        if (!chs.length) return;
+        const opts = chs.map(c =>
+            `<option value="${c.order}">${c.order}. ${escapeHtml(c.title)}</option>`).join('');
+        startSel.innerHTML = opts;
+        endSel.innerHTML = opts;
+        startSel.value = String(chs[0].order);
+        endSel.value = String(chs[chs.length - 1].order);
+        startSel.disabled = endSel.disabled = false;
+        updateExportNamePreview();
+    }).catch(e => showToast('Failed to load chapters: ' + e.message, 5000));
     const eff = novel.effective_settings || {};
     const voiceSel = document.getElementById('export-voice');
     voiceSel.innerHTML = state.voices.map(v =>
@@ -1685,8 +1771,10 @@ function setupEventListeners() {
     document.getElementById('btn-save-plex').addEventListener('click', openExportModal);
     document.getElementById('btn-export-cancel').addEventListener('click', closeExportModal);
     document.getElementById('btn-export-confirm').addEventListener('click', startExport);
-    document.getElementById('export-start').addEventListener('input', updateExportNamePreview);
-    document.getElementById('export-end').addEventListener('input', updateExportNamePreview);
+    document.getElementById('export-start').addEventListener('change', updateExportNamePreview);
+    document.getElementById('export-end').addEventListener('change', updateExportNamePreview);
+    document.querySelectorAll('.settings-tab').forEach(btn =>
+        btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab)));
     document.getElementById('modal-export').addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeExportModal();
     });

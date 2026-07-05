@@ -123,6 +123,12 @@
     <div id="modal-settings" class="modal" style="display:none;">
         <div class="modal-content">
             <h3>Settings</h3>
+            <div class="settings-tabs">
+                <button class="lib-tab settings-tab active" data-tab="playback">Playback</button>
+                <button class="lib-tab settings-tab" data-tab="export">Export</button>
+                <button class="lib-tab settings-tab" data-tab="voices">Voices</button>
+            </div>
+            <div id="settings-panel-playback" class="settings-panel">
             <div class="setting-row">
                 <label for="setting-voice">Voice</label>
                 <select id="setting-voice"></select>
@@ -160,7 +166,8 @@
                     <option value="desc">Descending (newest first)</option>
                 </select>
             </div>
-            <h3 class="settings-heading">Audiobook Export</h3>
+            </div>
+            <div id="settings-panel-export" class="settings-panel" style="display:none;">
             <div class="setting-row">
                 <label for="audiobook-dir">Audiobook folder</label>
                 <input type="text" id="audiobook-dir" placeholder="E:\Plex\Audiobooks\Audiobooks">
@@ -181,6 +188,11 @@
                     </select>
                     <button id="btn-load-libraries" class="secondary-btn btn-small">Load libraries</button>
                 </div>
+            </div>
+            </div>
+            <div id="settings-panel-voices" class="settings-panel" style="display:none;">
+                <div id="voice-demo-list"></div>
+                <p class="hint">Demos are generated on first play, then cached. The very first one may take a few seconds.</p>
             </div>
             <div class="modal-actions">
                 <button id="btn-settings-close" class="primary-btn">Done</button>
@@ -234,11 +246,11 @@
             <h3>Save to Plex</h3>
             <div class="setting-row">
                 <label for="export-start">From chapter</label>
-                <input type="number" id="export-start" min="1">
+                <select id="export-start" class="export-chapter-select"></select>
             </div>
             <div class="setting-row">
                 <label for="export-end">To chapter</label>
-                <input type="number" id="export-end" min="1">
+                <select id="export-end" class="export-chapter-select"></select>
             </div>
             <div class="setting-row">
                 <label for="export-voice">Voice</label>

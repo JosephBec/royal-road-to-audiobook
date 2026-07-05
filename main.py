@@ -18,9 +18,9 @@ from pathlib import Path
 
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 
 from database import init_db, SessionLocal, retention_policy
 from routers import novels, chapters, progress, settings, exports
@@ -133,6 +133,44 @@ async def list_voices():
         "default_voice": "af_heart",
         "default_speed": 1.0,
     }
+
+
+# Same passage for every voice so demos are directly comparable.
+DEMO_TEXT = (
+    "Chapter one. The rain had stopped by the time Simon reached the old library, "
+    "but thunder still rolled somewhere beyond the hills. "
+    "\"You're late,\" the archivist said, not looking up from her ledger."
+)
+VOICE_DEMO_DIR = Path(__file__).parent / "voice_demos"
+
+
+@app.get("/api/voices/{voice_id}/demo")
+async def voice_demo(voice_id: str):
+    """Serve a short demo clip for a voice; synthesized on first request, cached on disk.
+
+    Runs at interactive priority — the user is actively waiting to hear it.
+    """
+    config_path = Path(__file__).parent / "config.yaml"
+    valid_ids = {"af_heart"}
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        valid_ids = {v["id"] for v in config.get("voices", [])}
+    if voice_id not in valid_ids:
+        raise HTTPException(status_code=404, detail="Unknown voice")
+
+    demo_path = VOICE_DEMO_DIR / f"{voice_id}.wav"
+    if not demo_path.exists():
+        import numpy as np
+        import soundfile as sf
+        import tts
+        with tts.interactive_synthesis():
+            segments = await tts.synthesize_batch(DEMO_TEXT, voice_id, 1.0)
+        if not segments:
+            raise HTTPException(status_code=502, detail="Demo synthesis produced no audio")
+        VOICE_DEMO_DIR.mkdir(exist_ok=True)
+        sf.write(str(demo_path), np.concatenate(segments), tts.SAMPLE_RATE, subtype="PCM_16")
+    return FileResponse(str(demo_path), media_type="audio/wav", filename=f"{voice_id}.wav")
 
 
 def main():
