@@ -12,6 +12,7 @@ const state = {
     libraryTab: location.hash === '#favorites' ? 'favorites' : 'all',
     librarySort: localStorage.getItem('librarySort') || 'added',
     libraryView: localStorage.getItem('libraryView') || 'grid',
+    exportSpeed: 1.0,
     _dragging: false,
     _suppressClick: false,
     chapters: [],
@@ -1485,19 +1486,10 @@ function openExportModal() {
     voiceSel.innerHTML = state.voices.map(v =>
         `<option value="${escapeHtml(v.id)}" ${v.id === eff.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
-    // Default to the novel's effective speed. Match numerically (String(1.0)
-    // is "1" but option values are "1.0"), and inject the exact value if it
-    // isn't one of the 0.25-step presets (e.g. a playback speed of 1.1).
-    const speedSel = document.getElementById('export-speed');
-    const effSpeed = eff.speed ?? 1.0;
-    if (![...speedSel.options].some(o => parseFloat(o.value) === effSpeed)) {
-        const opt = document.createElement('option');
-        opt.value = String(effSpeed);
-        opt.textContent = String(effSpeed);
-        const next = [...speedSel.options].find(o => parseFloat(o.value) > effSpeed);
-        speedSel.insertBefore(opt, next || null);
-    }
-    [...speedSel.options].forEach(o => { o.selected = parseFloat(o.value) === effSpeed; });
+    // Same +/− stepper as everywhere else, defaulting to the novel's
+    // effective speed (0.05 steps, clamped 0.5–2.0)
+    state.exportSpeed = eff.speed ?? 1.0;
+    updateExportSpeedDisplay();
     updateExportNamePreview();
     document.getElementById('modal-export').style.display = 'flex';
 }
@@ -1508,6 +1500,11 @@ function updateExportNamePreview() {
     const e = document.getElementById('export-end').value || '?';
     document.getElementById('export-name-preview').textContent =
         `${state.currentNovel.title} - Chapters ${s} - ${e}.m4b`;
+}
+
+function updateExportSpeedDisplay() {
+    document.getElementById('export-speed-value').textContent =
+        `${state.exportSpeed.toFixed(2)}x`;
 }
 
 function closeExportModal() {
@@ -1522,7 +1519,7 @@ async function startExport() {
             start_order: parseInt(document.getElementById('export-start').value, 10),
             end_order: parseInt(document.getElementById('export-end').value, 10),
             voice: document.getElementById('export-voice').value,
-            speed: parseFloat(document.getElementById('export-speed').value),
+            speed: state.exportSpeed,
         });
         closeExportModal();
         showToast('Export queued');
@@ -1782,6 +1779,14 @@ function setupEventListeners() {
     document.getElementById('btn-export-confirm').addEventListener('click', startExport);
     document.getElementById('export-start').addEventListener('change', updateExportNamePreview);
     document.getElementById('export-end').addEventListener('change', updateExportNamePreview);
+    document.getElementById('export-speed-down').addEventListener('click', () => {
+        state.exportSpeed = Math.max(0.5, Math.round((state.exportSpeed - 0.05) * 100) / 100);
+        updateExportSpeedDisplay();
+    });
+    document.getElementById('export-speed-up').addEventListener('click', () => {
+        state.exportSpeed = Math.min(2.0, Math.round((state.exportSpeed + 0.05) * 100) / 100);
+        updateExportSpeedDisplay();
+    });
     document.querySelectorAll('.settings-tab').forEach(btn =>
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab)));
     document.getElementById('modal-export').addEventListener('click', (e) => {

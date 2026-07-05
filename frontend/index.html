@@ -260,16 +260,12 @@
                 <select id="export-voice"></select>
             </div>
             <div class="setting-row">
-                <label for="export-speed">Speed</label>
-                <select id="export-speed">
-                    <option value="0.5">0.5</option>
-                    <option value="0.75">0.75</option>
-                    <option value="1.0">1.0</option>
-                    <option value="1.25">1.25</option>
-                    <option value="1.5">1.5</option>
-                    <option value="1.75">1.75</option>
-                    <option value="2.0">2.0</option>
-                </select>
+                <label>Speed</label>
+                <div class="speed-control">
+                    <button id="export-speed-down" class="small-btn">−</button>
+                    <span id="export-speed-value">1.00x</span>
+                    <button id="export-speed-up" class="small-btn">+</button>
+                </div>
             </div>
             <p class="hint" id="export-name-preview"></p>
             <div class="modal-actions">
