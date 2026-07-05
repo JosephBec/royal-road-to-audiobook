@@ -1274,6 +1274,9 @@ function setupCardDrag(card) {
         } else {
             target.before(card);
         }
+        // Moving the card in the DOM disconnects it briefly, which releases
+        // pointer capture — re-grab it so the drag survives multiple swaps.
+        try { card.setPointerCapture(e.pointerId); } catch (err) {}
     });
 
     const finish = () => {
@@ -1396,7 +1399,10 @@ function openExportModal() {
     voiceSel.innerHTML = state.voices.map(v =>
         `<option value="${escapeHtml(v.id)}" ${v.id === eff.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
-    document.getElementById('export-speed').value = String(eff.speed ?? 1.0);
+    // Match numerically: String(1.0) is "1" but the option values are "1.0"
+    const speedSel = document.getElementById('export-speed');
+    const effSpeed = eff.speed ?? 1.0;
+    [...speedSel.options].forEach(o => { o.selected = parseFloat(o.value) === effSpeed; });
     updateExportNamePreview();
     document.getElementById('modal-export').style.display = 'flex';
 }
