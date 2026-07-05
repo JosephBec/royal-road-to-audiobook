@@ -800,6 +800,37 @@ a:hover { color: var(--accent-hover); }
     text-align: center;
 }
 
+/* ===== Exports (Save to Plex) ===== */
+.hint {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.export-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+.export-row:last-child { border-bottom: none; }
+
+.export-status {
+    margin-left: 6px;
+    font-size: 0.8em;
+    padding: 1px 8px;
+    border-radius: 8px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+.export-completed { background: var(--success); color: #06231f; }
+.export-failed { background: var(--danger); color: #2b0b0b; }
+.export-running { background: var(--accent); color: #fff; }
+.export-interrupted { background: var(--warning); color: #3a2600; }
+.export-canceled { background: var(--bg-hover); color: var(--text-secondary); }
+.export-queued { background: var(--bg-hover); color: var(--text-secondary); }
+
 /* ===== Toast ===== */
 .toast {
     position: fixed;

@@ -53,6 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAddNovelVisibility();
     applyLibraryTab();
     document.getElementById('library-sort').value = state.librarySort;
+    startExportsPolling(); // stops itself when no jobs are active
 });
 
 window.addEventListener('hashchange', () => {
@@ -1325,6 +1326,159 @@ async function updateSetting(key, value) {
     }
 }
 
+// ===== Save to Plex exports =====
+let exportsPollTimer = null;
+let lastJobStatuses = {};
+
+function openExportModal() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    if (!(state.settings.audiobook_dir || '').trim()) {
+        showToast('Set your audiobook folder in Settings first', 5000);
+        return;
+    }
+    document.getElementById('export-start').value = 1;
+    document.getElementById('export-end').value = novel.total_chapters || 1;
+    const eff = novel.effective_settings || {};
+    const voiceSel = document.getElementById('export-voice');
+    voiceSel.innerHTML = state.voices.map(v =>
+        `<option value="${escapeHtml(v.id)}" ${v.id === eff.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
+    ).join('');
+    document.getElementById('export-speed').value = String(eff.speed ?? 1.0);
+    updateExportNamePreview();
+    document.getElementById('modal-export').style.display = 'flex';
+}
+
+function updateExportNamePreview() {
+    if (!state.currentNovel) return;
+    const s = document.getElementById('export-start').value || '?';
+    const e = document.getElementById('export-end').value || '?';
+    document.getElementById('export-name-preview').textContent =
+        `${state.currentNovel.title} - Chapters ${s} - ${e}.m4b`;
+}
+
+function closeExportModal() {
+    document.getElementById('modal-export').style.display = 'none';
+}
+
+async function startExport() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    try {
+        await api('POST', `/api/novels/${novel.id}/export`, {
+            start_order: parseInt(document.getElementById('export-start').value, 10),
+            end_order: parseInt(document.getElementById('export-end').value, 10),
+            voice: document.getElementById('export-voice').value,
+            speed: parseFloat(document.getElementById('export-speed').value),
+        });
+        closeExportModal();
+        showToast('Export queued');
+        startExportsPolling();
+    } catch (e) {
+        showToast('Export failed to start: ' + e.message, 5000);
+    }
+}
+
+async function refreshExports() {
+    let data;
+    try {
+        data = await api('GET', '/api/exports');
+    } catch (e) {
+        return;
+    }
+    const jobs = data.jobs || [];
+    const active = jobs.filter(j => j.status === 'queued' || j.status === 'running');
+
+    const badge = document.getElementById('exports-badge');
+    badge.style.display = active.length ? '' : 'none';
+    if (active.length) {
+        const running = active.find(j => j.status === 'running');
+        document.getElementById('exports-badge-count').textContent = running
+            ? `${running.chapters_done}/${running.chapters_total}`
+            : `${active.length} queued`;
+    }
+
+    for (const j of jobs) {
+        const prev = lastJobStatuses[j.id];
+        if (prev && prev !== j.status) {
+            if (j.status === 'completed') showToast(`✅ Export done: ${j.novel_title}`, 6000);
+            if (j.status === 'failed') showToast(`❌ Export failed: ${j.error || 'see Exports panel'}`, 8000);
+        }
+        lastJobStatuses[j.id] = j.status;
+    }
+
+    renderExportsList(jobs);
+
+    if (!active.length) stopExportsPolling();
+}
+
+function renderExportsList(jobs) {
+    const el = document.getElementById('exports-list');
+    if (!el) return;
+    if (!jobs.length) {
+        el.innerHTML = '<p class="hint">No exports yet.</p>';
+        return;
+    }
+    el.innerHTML = jobs.map(j => `
+        <div class="export-row">
+          <div>
+            <strong>${escapeHtml(j.novel_title)}</strong> — Ch ${j.start_order}–${j.end_order}
+            <span class="export-status export-${j.status}">${escapeHtml(j.status)}</span>
+            <div class="hint">${j.status === 'running' ? `${j.chapters_done}/${j.chapters_total} · ` : ''}${escapeHtml(j.detail || j.error || '')}</div>
+          </div>
+          <div>
+            ${(j.status === 'queued' || j.status === 'running') ? `<button class="secondary-btn btn-small" data-cancel-id="${j.id}">Cancel</button>` : ''}
+            ${(j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled') ? `<button class="secondary-btn btn-small" data-retry-id="${j.id}">Retry</button>` : ''}
+          </div>
+        </div>`).join('');
+
+    el.querySelectorAll('[data-cancel-id]').forEach(btn => {
+        btn.addEventListener('click', () => cancelExport(parseInt(btn.dataset.cancelId, 10)));
+    });
+    el.querySelectorAll('[data-retry-id]').forEach(btn => {
+        btn.addEventListener('click', () => retryExport(parseInt(btn.dataset.retryId, 10)));
+    });
+}
+
+async function cancelExport(id) {
+    try {
+        await api('POST', `/api/exports/${id}/cancel`);
+        refreshExports();
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
+async function retryExport(id) {
+    try {
+        await api('POST', `/api/exports/${id}/retry`);
+        startExportsPolling();
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
+function startExportsPolling() {
+    refreshExports();
+    if (!exportsPollTimer) exportsPollTimer = setInterval(refreshExports, 3000);
+}
+
+function stopExportsPolling() {
+    if (exportsPollTimer) {
+        clearInterval(exportsPollTimer);
+        exportsPollTimer = null;
+    }
+}
+
+function openExportsPanel() {
+    document.getElementById('modal-exports').style.display = 'flex';
+    refreshExports();
+}
+
+function closeExportsPanel() {
+    document.getElementById('modal-exports').style.display = 'none';
+}
+
 // ===== Event Listeners =====
 function setupEventListeners() {
     // Add novel
@@ -1460,4 +1614,21 @@ function setupEventListeners() {
 
     // Player settings button opens settings modal
     document.getElementById('btn-player-settings').addEventListener('click', openSettings);
+
+    // Save to Plex
+    document.getElementById('btn-save-plex').addEventListener('click', openExportModal);
+    document.getElementById('btn-export-cancel').addEventListener('click', closeExportModal);
+    document.getElementById('btn-export-confirm').addEventListener('click', startExport);
+    document.getElementById('export-start').addEventListener('input', updateExportNamePreview);
+    document.getElementById('export-end').addEventListener('input', updateExportNamePreview);
+    document.getElementById('modal-export').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeExportModal();
+    });
+
+    // Exports badge/panel
+    document.getElementById('exports-badge').addEventListener('click', openExportsPanel);
+    document.getElementById('btn-exports-close').addEventListener('click', closeExportsPanel);
+    document.getElementById('modal-exports').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeExportsPanel();
+    });
 }

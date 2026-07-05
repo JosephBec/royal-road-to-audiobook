@@ -24,6 +24,7 @@ Add novels by URL, browse chapters, and listen with real-time audio synthesis on
 - **Mobile-friendly** — Responsive design, accessible from phone via local network or Tailscale
 - **Persistent mini player** — Always-visible transport controls with scrub bar
 - **Dark theme** — Easy on the eyes for long listening sessions
+- **Save to Plex (M4B export)** — Turn a chapter range into an M4B audiobook with chapter markers and cover art, dropped straight into your Plex library
 
 ## Requirements
 
@@ -124,6 +125,51 @@ chapter sort order for that novel only. Each control has a "Default" option that
 falls back to the global setting; overrides apply immediately, including to the
 chapter currently playing.
 
+### Save to Plex (M4B export)
+
+On a novel's detail page, click **💾 Save to Plex** to bundle a chapter range into
+a single M4B audiobook file and hand it to Plex:
+
+- Pick **From / To** chapter (defaults to the full novel), and a **Voice** and
+  **Speed** (defaulting to that novel's effective settings). A live preview shows
+  the exact output filename before you export.
+- **Naming is fixed and not configurable:** `Title - Chapters X - Y.m4b` (no
+  author, sanitized for Windows-illegal characters). Re-exporting the same range
+  overwrites the existing file.
+- The button (technically, the confirm action) requires an **audiobook folder**
+  to be set in Settings first — you'll get a toast telling you to set it if it's
+  empty.
+- The file gets chapter markers (one per source chapter, titled and timed from
+  the synthesized audio), embedded cover art, and `title`/`artist`/`genre` tags,
+  then is moved into your audiobook folder and (if Plex is configured) triggers a
+  library section refresh.
+
+**Settings** (gear icon → "Audiobook Export"):
+
+- **Audiobook folder** — where finished `.m4b` files are moved (e.g. your Plex
+  library's audiobook folder)
+- **Plex server URL** — e.g. `http://localhost:32400`
+- **Plex token** — your `X-Plex-Token`
+- **Plex library** — pick from a dropdown populated via "Load libraries" once
+  URL + token are set
+
+**Exports never delay playback.** Export jobs run on the same GPU worker as
+interactive synthesis, but strictly at the lowest priority — a job yields
+between chapter batches until playback isn't waiting on synthesis, every active
+listener's next few chapters are already cached, and favorites sync isn't
+running. The header shows a **⏳ Exports** badge with live progress
+(`done/total` while running, or `N queued`) whenever a job is active; click it
+to open the panel with per-job status, detail line, and Cancel/Retry.
+
+- **Retry** re-queues a failed, interrupted, or canceled job and reuses any
+  chapters it already finished synthesizing — it does not start over.
+- **Interrupted** jobs are ones that were mid-export when the server restarted
+  (e.g. you stopped it); Retry resumes them from where they left off.
+- If Plex can't be reached when the export finishes (for example its Docker
+  container isn't running), the job still completes and the file is still
+  saved — the detail line reads *"Plex is unreachable (is Docker running?)"*
+  and the library will pick it up on its next scan.
+
 ### Favorites
 
 Star a novel (☆ on its card or detail page) to mark it as actively followed:
@@ -205,7 +251,11 @@ royal-road-to-audiobook/
 │   ├── novels.py        # Novel CRUD + refresh
 │   ├── chapters.py      # Chapter list + audio streaming + synthesis
 │   ├── progress.py      # Playback progress tracking
-│   └── settings.py      # App settings (voice, speed, mode)
+│   ├── settings.py      # App settings (voice, speed, mode)
+│   └── exports.py       # M4B export jobs + Plex library listing
+├── export_worker.py     # Background export queue (lowest-priority GPU worker)
+├── m4b.py                # M4B assembly: naming, chapter metadata, ffmpeg encode
+├── plex.py               # Plex API client (library listing, section refresh)
 ├── frontend/
 │   ├── index.html       # SPA shell
 │   ├── app.js           # Frontend logic
@@ -260,6 +310,11 @@ Place a shortcut to this file in your Windows Startup folder (`shell:startup`).
 | PUT | `/api/novels/order` | Save manual card order |
 | POST | `/api/library/refresh-favorites` | Kick background favorites sync (10-min cooldown) |
 | GET | `/api/voices` | List available voices |
+| POST | `/api/novels/{id}/export` | Queue an M4B export job for a chapter range |
+| GET | `/api/exports` | List active + recent export jobs with progress |
+| POST | `/api/exports/{id}/cancel` | Cancel a queued or running export job |
+| POST | `/api/exports/{id}/retry` | Re-queue a failed/interrupted/canceled job |
+| GET | `/api/plex/libraries` | List Plex library sections (requires URL + token) |
 | GET | `/` | Serve frontend |
 
 ## Adding a Scraper for Another Site

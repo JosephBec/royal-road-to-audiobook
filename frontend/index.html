@@ -15,6 +15,7 @@
     <header id="top-bar">
         <h1 id="btn-home" style="cursor:pointer;"><img src="/static/favicon.svg" alt="" class="app-logo">Novel TTS</h1>
         <div class="top-actions">
+            <button id="exports-badge" class="icon-btn" title="Exports" style="display:none;">⏳ <span id="exports-badge-count"></span></button>
             <button id="btn-theme-toggle" class="icon-btn" title="Toggle theme">🌙</button>
             <button id="btn-settings" class="icon-btn" title="Settings">⚙️</button>
             <button id="btn-add-novel" class="primary-btn">+ Add Novel</button>
@@ -63,6 +64,7 @@
                     <button id="btn-favorite" class="secondary-btn" title="Favorite">☆</button>
                     <button id="btn-novel-settings" class="secondary-btn">⚙ Novel</button>
                     <button id="btn-refresh" class="secondary-btn">↻ Refresh</button>
+                    <button id="btn-save-plex" class="secondary-btn">💾 Save to Plex</button>
                 </div>
             </div>
             <button id="btn-resume" class="primary-btn resume-btn" style="display:none;"></button>
@@ -221,6 +223,53 @@
             </div>
             <div class="modal-actions">
                 <button id="btn-ns-close" class="primary-btn">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save to Plex (Export) Modal -->
+    <div id="modal-export" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Save to Plex</h3>
+            <div class="setting-row">
+                <label for="export-start">From chapter</label>
+                <input type="number" id="export-start" min="1">
+            </div>
+            <div class="setting-row">
+                <label for="export-end">To chapter</label>
+                <input type="number" id="export-end" min="1">
+            </div>
+            <div class="setting-row">
+                <label for="export-voice">Voice</label>
+                <select id="export-voice"></select>
+            </div>
+            <div class="setting-row">
+                <label for="export-speed">Speed</label>
+                <select id="export-speed">
+                    <option value="0.5">0.5</option>
+                    <option value="0.75">0.75</option>
+                    <option value="1.0">1.0</option>
+                    <option value="1.25">1.25</option>
+                    <option value="1.5">1.5</option>
+                    <option value="1.75">1.75</option>
+                    <option value="2.0">2.0</option>
+                </select>
+            </div>
+            <p class="hint" id="export-name-preview"></p>
+            <div class="modal-actions">
+                <button id="btn-export-cancel" class="secondary-btn">Cancel</button>
+                <button id="btn-export-confirm" class="primary-btn">Export</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exports Panel -->
+    <div id="modal-exports" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>Exports</h3>
+            <div id="exports-list"></div>
+            <div class="modal-actions">
+                <button id="btn-exports-close" class="primary-btn">Close</button>
             </div>
         </div>
     </div>
