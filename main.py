@@ -53,6 +53,8 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Applying audio cache retention policy...")
     _retention_cleanup()
+    import export_worker
+    export_worker.start_worker()
     logger.info("Novel TTS server ready.")
     yield
     logger.info("Shutting down — applying audio cache retention policy...")
