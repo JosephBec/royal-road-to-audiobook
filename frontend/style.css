@@ -545,6 +545,10 @@ a:hover { color: var(--accent-hover); }
 }
 
 /* Supported-sites modal */
+#scraper-list {
+    max-height: 45vh;
+    overflow-y: auto;
+}
 .scraper-row {
     display: flex;
     align-items: baseline;

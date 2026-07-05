@@ -315,6 +315,9 @@ function renderLibrary() {
 
 // ===== Supported sites =====
 async function openScrapersModal() {
+    // One modal at a time: this is reached from Add Novel, which would
+    // otherwise stack on top of us
+    document.getElementById('modal-add').style.display = 'none';
     document.getElementById('modal-scrapers').style.display = 'flex';
     const el = document.getElementById('scraper-list');
     el.innerHTML = '<p class="hint">Loading…</p>';
@@ -337,6 +340,7 @@ async function openScrapersModal() {
 
 function closeScrapersModal() {
     document.getElementById('modal-scrapers').style.display = 'none';
+    openAddModal(); // return to where the link was clicked
 }
 
 // ===== Add Novel =====
