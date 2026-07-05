@@ -42,6 +42,11 @@ def start_refresh() -> dict:
     return {"started": True, "cooldown_remaining": COOLDOWN_SECONDS}
 
 
+def is_running() -> bool:
+    """True while a favorites sync pass is active (exports yield to it)."""
+    return _task is not None and not _task.done()
+
+
 async def _wait_for_interactive_idle():
     """Don't hog the TTS thread while the user is waiting on a chapter."""
     while tts.interactive_busy():
