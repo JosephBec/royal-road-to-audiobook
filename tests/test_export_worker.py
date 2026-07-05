@@ -45,11 +45,16 @@ def job_env(tmp_path, monkeypatch):
     monkeypatch.setattr(m4b, "assemble_m4b", fake_assemble)
 
     settings = db.query(database.Settings).first()
+    orig_audiobook_dir, orig_plex_url = settings.audiobook_dir, settings.plex_url
     settings.audiobook_dir = str(tmp_path / "plexlib")
     settings.plex_url = ""  # not configured: refresh skipped with note
     db.commit()
 
     yield db, database, export_worker, job, assembled
+    # Settings is a shared singleton row — restore it so later tests in the
+    # same session (which reuses one DB) see the original defaults.
+    settings = db.query(database.Settings).first()
+    settings.audiobook_dir, settings.plex_url = orig_audiobook_dir, orig_plex_url
     db.query(database.ExportJob).delete()
     db.query(database.Chapter).delete()
     db.query(database.Progress).delete()

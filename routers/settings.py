@@ -24,6 +24,10 @@ class SettingsResponse(BaseModel):
     auto_play: bool
     theme: str
     chapter_sort: str
+    audiobook_dir: str
+    plex_url: str
+    plex_token: str
+    plex_section_id: str
 
     class Config:
         from_attributes = True
@@ -36,6 +40,10 @@ class UpdateSettingsRequest(BaseModel):
     auto_play: bool | None = None
     theme: str | None = None
     chapter_sort: str | None = None
+    audiobook_dir: str | None = None
+    plex_url: str | None = None
+    plex_token: str | None = None
+    plex_section_id: str | None = None
 
 
 @router.get("", response_model=SettingsResponse)
@@ -75,6 +83,14 @@ async def update_settings(req: UpdateSettingsRequest, db: Session = Depends(get_
         if req.chapter_sort not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail="Chapter sort must be 'asc' or 'desc'")
         settings.chapter_sort = req.chapter_sort
+    if req.audiobook_dir is not None:
+        settings.audiobook_dir = req.audiobook_dir.strip()
+    if req.plex_url is not None:
+        settings.plex_url = req.plex_url.strip().rstrip("/")
+    if req.plex_token is not None:
+        settings.plex_token = req.plex_token.strip()
+    if req.plex_section_id is not None:
+        settings.plex_section_id = req.plex_section_id.strip()
 
     db.commit()
     db.refresh(settings)

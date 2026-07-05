@@ -240,6 +240,18 @@ async def delete_novel(novel_id: int, db: Session = Depends(get_db)):
     novel = db.query(Novel).filter(Novel.id == novel_id).first()
     if not novel:
         raise HTTPException(status_code=404, detail="Novel not found")
+
+    # Cancel any export jobs for this novel; the worker checks cancellation
+    # at every batch boundary.
+    from database import ExportJob
+    import export_worker
+    for job in db.query(ExportJob).filter(ExportJob.novel_id == novel_id,
+                                          ExportJob.status.in_(("queued", "running"))).all():
+        export_worker.request_cancel(job.id)
+        if job.status == "queued":
+            job.status = "canceled"
+            job.detail = "novel deleted"
+
     db.delete(novel)
     db.commit()
 
