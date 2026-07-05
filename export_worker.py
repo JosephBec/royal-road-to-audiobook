@@ -156,32 +156,50 @@ async def _worker_loop():
 
 
 async def _get_text(chapter_id: int) -> str:
-    """Chapter text from cache, else scrape (3 attempts) and store."""
+    """Chapter text from cache, else scrape (3 attempts) and store.
+
+    No DB session is held across the scrape awaits: read a snapshot in one
+    short session, scrape with none open, store in a second short session.
+    """
     db = SessionLocal()
     try:
         chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
         if chapter is None:
             raise RuntimeError(f"chapter {chapter_id} disappeared")
-        if chapter.text:
-            return chapter.text
-        scraper = get_scraper_for_url(chapter.rr_url)
-        if scraper is None:
-            raise RuntimeError(f"no scraper for {chapter.rr_url}")
-        last_err = None
-        for attempt in range(3):
-            try:
-                text = await scraper.scrape_chapter_text(chapter.rr_url)
-                chapter.text = text
-                chapter.word_count = len(text.split())
-                chapter.fetched_at = datetime.now(timezone.utc)
-                db.commit()
-                return text
-            except Exception as e:
-                last_err = e
-                await asyncio.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"failed to fetch '{chapter.title}': {last_err}")
+        cached, rr_url, title = chapter.text, chapter.rr_url, chapter.title
     finally:
         db.close()
+    if cached:
+        return cached
+
+    scraper = get_scraper_for_url(rr_url)
+    if scraper is None:
+        raise RuntimeError(f"no scraper for {rr_url}")
+    text = None
+    last_err = None
+    for attempt in range(3):
+        try:
+            text = await scraper.scrape_chapter_text(rr_url)
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(2 * (attempt + 1))
+    if text is None:
+        raise RuntimeError(f"failed to fetch '{title}': {last_err}")
+
+    db = SessionLocal()
+    try:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        if chapter is None:
+            raise RuntimeError(f"chapter {chapter_id} disappeared")
+        chapter.text = text
+        chapter.word_count = len(text.split())
+        chapter.fetched_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+    return text
 
 
 async def _synthesize_chapter_wav(job_id, chapter_id, title, voice, speed, wav_path: Path):

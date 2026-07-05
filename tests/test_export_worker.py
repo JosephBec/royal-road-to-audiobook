@@ -69,6 +69,8 @@ def test_run_job_produces_named_m4b(job_env, tmp_path):
     assert out.name == "Job Novel - Chapters 1 - 3.m4b"
     assert out.exists()
     assert assembled["chapters"] == ["C1", "C2", "C3"]
+    assert assembled["kwargs"]["book_title"] == "Job Novel - Chapters 1 - 3"
+    assert assembled["kwargs"]["author"] == "A"
     assert not (export_worker.EXPORT_DIR / str(job.id)).exists()  # cleaned on success
 
 
@@ -92,6 +94,28 @@ def test_retry_skips_existing_chapter_wavs(job_env, monkeypatch):
 
     asyncio.run(export_worker._run_job(job.id))
     assert calls["n"] == 2  # chapters 2 and 3 only
+
+
+def test_uncached_chapter_is_scraped_and_cached(job_env, monkeypatch):
+    db, database, export_worker, job, assembled = job_env
+    ch2 = (db.query(database.Chapter)
+           .filter_by(novel_id=job.novel_id, order=2).first())
+    ch2.text = None
+    db.commit()
+
+    class FakeScraper:
+        async def scrape_chapter_text(self, url):
+            return "scraped body"
+    monkeypatch.setattr(export_worker, "get_scraper_for_url",
+                        lambda url: FakeScraper())
+
+    asyncio.run(export_worker._run_job(job.id))
+    db.expire_all()
+    fresh = db.query(database.ExportJob).filter_by(id=job.id).first()
+    assert fresh.status == "completed"
+    ch2 = (db.query(database.Chapter)
+           .filter_by(novel_id=job.novel_id, order=2).first())
+    assert ch2.text == "scraped body"  # cache populated by the worker
 
 
 def test_cancel_marks_job_canceled(job_env, monkeypatch):
