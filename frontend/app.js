@@ -11,6 +11,7 @@ const state = {
     // Library organization
     libraryTab: location.hash === '#favorites' ? 'favorites' : 'all',
     librarySort: localStorage.getItem('librarySort') || 'added',
+    libraryView: localStorage.getItem('libraryView') || 'grid',
     _dragging: false,
     _suppressClick: false,
     chapters: [],
@@ -53,6 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateAddNovelVisibility();
     applyLibraryTab();
     document.getElementById('library-sort').value = state.librarySort;
+    applyLibraryView();
     startExportsPolling(); // stops itself when no jobs are active
 });
 
@@ -160,6 +162,61 @@ function sortedNovels() {
     return list;
 }
 
+function applyLibraryView() {
+    const isList = state.libraryView === 'list';
+    const btn = document.getElementById('library-view-toggle');
+    btn.textContent = isList ? '▦' : '☰';
+    btn.title = isList ? 'Switch to grid view' : 'Switch to list view';
+    document.getElementById('novel-grid').classList.toggle('novel-list', isList);
+}
+
+function novelCardHtml(novel) {
+    return `
+        <div class="novel-card" data-id="${novel.id}">
+            <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+            <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
+            ${novel.cover_url
+                ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy" draggable="false">`
+                : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
+            }
+            <div class="novel-card-body">
+                <div class="novel-card-title">${escapeHtml(novel.title)}</div>
+                <div class="novel-card-author">${escapeHtml(novel.author)}</div>
+                <div class="novel-card-progress">
+                    <span>${novel.total_chapters} chapters</span>
+                    ${novel.progress_chapter
+                        ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
+                        : ''
+                    }
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function novelRowHtml(novel) {
+    return `
+        <div class="novel-card novel-card--row" data-id="${novel.id}">
+            ${novel.cover_url
+                ? `<img class="novel-row-cover" src="${escapeHtml(novel.cover_url)}" alt="" loading="lazy" draggable="false">`
+                : `<div class="novel-row-cover novel-row-cover--empty">📖</div>`
+            }
+            <div class="novel-row-text">
+                <div class="novel-card-title">${escapeHtml(novel.title)}</div>
+                <div class="novel-card-author">${escapeHtml(novel.author)}</div>
+            </div>
+            <div class="novel-row-meta">
+                ${novel.progress_chapter
+                    ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
+                    : `<span class="novel-row-chapters">${novel.total_chapters} chs</span>`
+                }
+                <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+                <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
+            </div>
+        </div>
+    `;
+}
+
 function renderLibrary() {
     const grid = document.getElementById('novel-grid');
     const empty = document.getElementById('library-empty');
@@ -175,27 +232,8 @@ function renderLibrary() {
     }
 
     empty.style.display = 'none';
-    grid.innerHTML = novels.map(novel => `
-        <div class="novel-card" data-id="${novel.id}">
-            <button class="novel-card-fav" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
-            <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
-            ${novel.cover_url
-                ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy">`
-                : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
-            }
-            <div class="novel-card-body">
-                <div class="novel-card-title">${escapeHtml(novel.title)}</div>
-                <div class="novel-card-author">${escapeHtml(novel.author)}</div>
-                <div class="novel-card-progress">
-                    <span>${novel.total_chapters} chapters</span>
-                    ${novel.progress_chapter
-                        ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
-                        : ''
-                    }
-                </div>
-            </div>
-        </div>
-    `).join('');
+    const isList = state.libraryView === 'list';
+    grid.innerHTML = novels.map(n => isList ? novelRowHtml(n) : novelCardHtml(n)).join('');
 
     // Card click → open novel (suppressed right after a drag)
     grid.querySelectorAll('.novel-card').forEach(card => {
@@ -1188,32 +1226,45 @@ function updateFavoriteButton() {
     btn.title = fav ? 'Unfavorite' : 'Favorite';
 }
 
-// ===== Drag-to-reorder (long-press, works with touch) =====
+// ===== Drag-to-reorder =====
+// Touch/pen: 400ms long-press (movement first = scroll, not drag).
+// Mouse: no timer — press and move past a small threshold drags immediately;
+// press-and-release without movement stays a click.
 function setupCardDrag(card) {
     let pressTimer = null;
     let dragging = false;
+    let mouseArmed = false;
     let startX = 0, startY = 0;
+
+    const startDrag = (pointerId) => {
+        dragging = true;
+        state._dragging = true;
+        card.classList.add('dragging');
+        try { card.setPointerCapture(pointerId); } catch (err) {}
+    };
 
     card.addEventListener('pointerdown', (e) => {
         if (e.target.closest('button')) return;
         startX = e.clientX;
         startY = e.clientY;
-        pressTimer = setTimeout(() => {
-            dragging = true;
-            state._dragging = true;
-            card.classList.add('dragging');
-            try { card.setPointerCapture(e.pointerId); } catch (err) {}
-        }, 400);
+        if (e.pointerType === 'mouse') {
+            if (e.button !== 0) return;
+            mouseArmed = true;
+            return;
+        }
+        pressTimer = setTimeout(() => startDrag(e.pointerId), 400);
     });
 
     card.addEventListener('pointermove', (e) => {
         if (!dragging) {
-            // Movement before the long-press fires = scrolling, not dragging
-            if (pressTimer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) {
+            if (mouseArmed && (Math.abs(e.clientX - startX) > 8 || Math.abs(e.clientY - startY) > 8)) {
+                startDrag(e.pointerId);
+            } else if (pressTimer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) {
+                // Movement before the long-press fires = scrolling, not dragging
                 clearTimeout(pressTimer);
                 pressTimer = null;
             }
-            return;
+            if (!dragging) return;
         }
         const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.novel-card');
         if (!target || target === card) return;
@@ -1228,6 +1279,7 @@ function setupCardDrag(card) {
     const finish = () => {
         clearTimeout(pressTimer);
         pressTimer = null;
+        mouseArmed = false;
         if (!dragging) return;
         dragging = false;
         state._dragging = false;
@@ -1505,6 +1557,14 @@ function setupEventListeners() {
         localStorage.setItem('librarySort', state.librarySort);
         renderLibrary();
     });
+    document.getElementById('library-view-toggle').addEventListener('click', () => {
+        state.libraryView = state.libraryView === 'grid' ? 'list' : 'grid';
+        localStorage.setItem('libraryView', state.libraryView);
+        applyLibraryView();
+        renderLibrary();
+    });
+    // Native image drag would hijack pointer-based reordering with a mouse
+    document.getElementById('novel-grid').addEventListener('dragstart', (e) => e.preventDefault());
 
     // Block page scroll while a card is being dragged (iOS)
     document.addEventListener('touchmove', (e) => {

@@ -245,7 +245,7 @@ a:hover { color: var(--accent-hover); }
 /* ===== Library Grid ===== */
 .novel-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 20px;
 }
 
@@ -256,6 +256,7 @@ a:hover { color: var(--accent-hover); }
     cursor: pointer;
     transition: transform 0.15s, box-shadow 0.15s;
     border: 1px solid var(--border);
+    user-select: none;
 }
 .novel-card:hover {
     transform: translateY(-3px);
@@ -265,10 +266,91 @@ a:hover { color: var(--accent-hover); }
 
 .novel-card-cover {
     width: 100%;
-    height: 180px;
+    aspect-ratio: 2 / 3;
+    height: auto;
     object-fit: cover;
     background: var(--bg-secondary);
 }
+
+/* ===== Library List View ===== */
+#library-view-toggle {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin-left: 8px;
+    outline: none;
+}
+#library-view-toggle:hover { border-color: var(--accent); }
+
+.novel-grid.novel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.novel-card--row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+}
+.novel-card--row:hover { transform: none; }
+
+.novel-row-cover {
+    width: 38px;
+    aspect-ratio: 2 / 3;
+    height: auto;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+    background: var(--bg-secondary);
+}
+.novel-row-cover--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    color: var(--text-muted);
+}
+
+.novel-row-text { flex: 1; min-width: 0; }
+.novel-card--row .novel-card-title {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    margin-bottom: 2px;
+}
+.novel-card--row .novel-card-author { margin-bottom: 0; }
+
+.novel-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+.novel-row-chapters { color: var(--text-muted); font-size: 0.8rem; }
+.novel-row-meta .progress-badge {
+    cursor: pointer;
+    background: var(--accent-dim);
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.novel-card--row .novel-card-fav,
+.novel-card--row .novel-card-delete {
+    position: static;
+    background: transparent;
+    width: auto;
+    height: auto;
+}
+.novel-card--row .novel-card-delete { display: none; }
+.novel-card--row:hover .novel-card-delete { display: flex; }
 
 .novel-card-body {
     padding: 16px;
@@ -857,8 +939,7 @@ a:hover { color: var(--accent-hover); }
 /* ===== Responsive ===== */
 @media (max-width: 600px) {
     #app { padding: 16px; }
-    .novel-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
-    .novel-card-cover { height: 120px; }
+    .novel-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
     .novel-header { flex-direction: column; }
     .novel-info { flex-direction: column; align-items: center; text-align: center; }
     #mini-player { padding: 6px 12px; }
