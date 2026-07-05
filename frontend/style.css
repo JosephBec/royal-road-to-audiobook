@@ -185,6 +185,14 @@ a:hover { color: var(--accent-hover); }
     flex-wrap: wrap;
 }
 
+#library-sort-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin-left: auto; /* keep sort + view toggle grouped on the right */
+}
+#library-sort-icon { display: none; }
+
 .lib-tabs {
     display: flex;
     gap: 6px;
@@ -234,16 +242,11 @@ a:hover { color: var(--accent-hover); }
     justify-content: center;
     z-index: 2;
 }
-/* Unfavorited: hidden until you hover the card (desktop). On touch there is
-   no hover — favorite from the novel detail page instead. Favorited stars
-   always show so the library reads at a glance. */
-@media (hover: hover) {
-    .novel-card-fav:not(.is-fav) { opacity: 0; transition: opacity 0.12s; }
-    .novel-card:hover .novel-card-fav:not(.is-fav) { opacity: 1; }
-}
-@media (hover: none) {
-    .novel-card-fav:not(.is-fav) { display: none; }
-}
+/* Unfavorited: revealed on hover — desktop mouse-over, or first tap on
+   mobile (sticky hover), exactly like the delete ✕. Favorited stars always
+   show so the library reads at a glance. */
+.novel-card-fav:not(.is-fav) { opacity: 0; transition: opacity 0.12s; }
+.novel-card:hover .novel-card-fav:not(.is-fav) { opacity: 1; }
 
 .novel-card.dragging {
     opacity: 0.6;
@@ -369,6 +372,11 @@ a:hover { color: var(--accent-hover); }
     display: flex;
     gap: 8px;
     margin-bottom: 12px;
+}
+
+#voice-demo-list {
+    max-height: 50vh;
+    overflow-y: auto;
 }
 
 .voice-demo-row {
@@ -973,6 +981,34 @@ a:hover { color: var(--accent-hover); }
     .setting-row { gap: 10px; }
     .setting-row label { flex-shrink: 0; }
     .setting-row select { max-width: 52%; min-width: 0; text-overflow: ellipsis; }
+
+    /* One-line library toolbar: tabs + sort icon + view toggle */
+    #library-toolbar { flex-wrap: nowrap; gap: 6px; }
+    .lib-tab { padding: 6px 10px; font-size: 0.85rem; white-space: nowrap; }
+    #library-sort-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 36px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        font-size: 1rem;
+    }
+    /* The real select sits invisibly on top so tapping the icon opens the
+       native picker — sorting behavior is unchanged */
+    #library-sort-wrap #library-sort {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+    }
+    #library-view-toggle { padding: 8px 10px; }
+
+    /* Icon-only novel action buttons (⚙ ↻ 💾) — labels are implied */
+    .btn-label { display: none; }
     .novel-header { flex-direction: column; }
     .novel-info { flex-direction: column; align-items: center; text-align: center; }
     #mini-player { padding: 6px 12px; }

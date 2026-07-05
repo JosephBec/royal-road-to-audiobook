@@ -1485,9 +1485,18 @@ function openExportModal() {
     voiceSel.innerHTML = state.voices.map(v =>
         `<option value="${escapeHtml(v.id)}" ${v.id === eff.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
-    // Match numerically: String(1.0) is "1" but the option values are "1.0"
+    // Default to the novel's effective speed. Match numerically (String(1.0)
+    // is "1" but option values are "1.0"), and inject the exact value if it
+    // isn't one of the 0.25-step presets (e.g. a playback speed of 1.1).
     const speedSel = document.getElementById('export-speed');
     const effSpeed = eff.speed ?? 1.0;
+    if (![...speedSel.options].some(o => parseFloat(o.value) === effSpeed)) {
+        const opt = document.createElement('option');
+        opt.value = String(effSpeed);
+        opt.textContent = String(effSpeed);
+        const next = [...speedSel.options].find(o => parseFloat(o.value) > effSpeed);
+        speedSel.insertBefore(opt, next || null);
+    }
     [...speedSel.options].forEach(o => { o.selected = parseFloat(o.value) === effSpeed; });
     updateExportNamePreview();
     document.getElementById('modal-export').style.display = 'flex';
