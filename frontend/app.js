@@ -1133,6 +1133,28 @@ function openSettings() {
 
     // Chapter sort
     document.getElementById('setting-chapter-sort').value = state.settings.chapter_sort;
+
+    // Audiobook export / Plex
+    document.getElementById('audiobook-dir').value = state.settings.audiobook_dir || '';
+    document.getElementById('plex-url').value = state.settings.plex_url || '';
+    document.getElementById('plex-token').value = state.settings.plex_token || '';
+    const sec = document.getElementById('plex-section');
+    sec.innerHTML = state.settings.plex_section_id
+        ? `<option value="${escapeHtml(state.settings.plex_section_id)}" selected>Library #${escapeHtml(state.settings.plex_section_id)} (saved)</option>`
+        : '<option value="">— load libraries first —</option>';
+}
+
+async function loadPlexLibraries() {
+    try {
+        const data = await api('GET', '/api/plex/libraries');
+        const sec = document.getElementById('plex-section');
+        sec.innerHTML = '<option value="">— choose —</option>' + data.libraries.map(l =>
+            `<option value="${escapeHtml(l.id)}" ${l.id === state.settings.plex_section_id ? 'selected' : ''}>${escapeHtml(l.title)} (${escapeHtml(l.type)})</option>`
+        ).join('');
+        showToast('Libraries loaded — pick your audiobook library');
+    } catch (e) {
+        showToast(e.message, 5000);
+    }
 }
 
 function applyPlaybackRate() {
@@ -1394,6 +1416,24 @@ function setupEventListeners() {
     document.getElementById('setting-chapter-sort').addEventListener('change', (e) => {
         updateSetting('chapter_sort', e.target.value);
     });
+
+    document.getElementById('audiobook-dir').addEventListener('change', (e) => {
+        updateSetting('audiobook_dir', e.target.value);
+    });
+
+    document.getElementById('plex-url').addEventListener('change', (e) => {
+        updateSetting('plex_url', e.target.value);
+    });
+
+    document.getElementById('plex-token').addEventListener('change', (e) => {
+        updateSetting('plex_token', e.target.value);
+    });
+
+    document.getElementById('plex-section').addEventListener('change', (e) => {
+        updateSetting('plex_section_id', e.target.value);
+    });
+
+    document.getElementById('btn-load-libraries').addEventListener('click', loadPlexLibraries);
 
     document.getElementById('speed-down').addEventListener('click', () => {
         const newSpeed = Math.max(0.5, Math.round((state.settings.speed - 0.05) * 100) / 100);

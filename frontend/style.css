@@ -752,6 +752,41 @@ a:hover { color: var(--accent-hover); }
     accent-color: var(--accent);
 }
 
+.setting-row input[type="text"],
+.setting-row input[type="password"] {
+    width: 220px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.setting-row input[type="text"]:focus,
+.setting-row input[type="password"]:focus {
+    border-color: var(--accent);
+}
+
+.modal-content h3.settings-heading {
+    margin: 16px 0 8px;
+    font-size: 0.95em;
+    font-weight: 600;
+    opacity: 0.8;
+}
+
+.plex-section-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
 .speed-control {
     display: flex;
     align-items: center;

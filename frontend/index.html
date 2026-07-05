@@ -157,6 +157,28 @@
                     <option value="desc">Descending (newest first)</option>
                 </select>
             </div>
+            <h3 class="settings-heading">Audiobook Export</h3>
+            <div class="setting-row">
+                <label for="audiobook-dir">Audiobook folder</label>
+                <input type="text" id="audiobook-dir" placeholder="E:\Plex\Audiobooks\Audiobooks">
+            </div>
+            <div class="setting-row">
+                <label for="plex-url">Plex server URL</label>
+                <input type="text" id="plex-url" placeholder="http://localhost:32400">
+            </div>
+            <div class="setting-row">
+                <label for="plex-token">Plex token</label>
+                <input type="password" id="plex-token" placeholder="X-Plex-Token">
+            </div>
+            <div class="setting-row">
+                <label for="plex-section">Plex library</label>
+                <div class="plex-section-control">
+                    <select id="plex-section">
+                        <option value="">— load libraries first —</option>
+                    </select>
+                    <button id="btn-load-libraries" class="secondary-btn btn-small">Load libraries</button>
+                </div>
+            </div>
             <div class="modal-actions">
                 <button id="btn-settings-close" class="primary-btn">Done</button>
             </div>
