@@ -91,8 +91,10 @@ def assemble_m4b(
         durations = [(title, sf.info(str(wav)).duration) for title, wav in chapter_wavs]
         total = sum(d for _, d in durations)
 
+        # ffmpeg's concat demuxer resolves relative entries against the list
+        # file's own directory, so entries must be absolute paths.
         concat_list.write_text(
-            "".join(f"file '{str(wav).replace(chr(39), chr(39) + chr(92) + chr(39) * 2)}'\n"
+            "".join(f"file '{str(Path(wav).resolve()).replace(chr(39), chr(39) + chr(92) + chr(39) * 2)}'\n"
                     for _, wav in chapter_wavs),
             encoding="utf-8")
 

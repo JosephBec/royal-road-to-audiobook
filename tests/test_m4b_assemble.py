@@ -34,6 +34,21 @@ def test_assemble_produces_chaptered_m4b(tmp_path):
     assert data["format"]["tags"].get("title") == "Test Book"
 
 
+def test_assemble_with_relative_paths(tmp_path, monkeypatch):
+    """Regression: the export worker passes job-dir-relative paths. ffmpeg's
+    concat demuxer resolves list entries against the LIST FILE's directory,
+    so relative entries used to double up ('export_jobs/1/export_jobs/1/...')."""
+    monkeypatch.chdir(tmp_path)
+    job_dir = Path("export_jobs") / "1"
+    job_dir.mkdir(parents=True)
+    w1 = job_dir / "chapter_00001.wav"
+    _sine_wav(w1, 1.0, 440)
+    out = job_dir / "book.m4b"
+
+    result = assemble_m4b([("Ch One", w1)], out, book_title="T", author="A")
+    assert result.exists()
+
+
 def test_assemble_failure_raises_and_cleans_up(tmp_path):
     w1 = tmp_path / "c1.wav"
     _sine_wav(w1, 1.0, 440)
