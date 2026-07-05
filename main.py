@@ -116,6 +116,15 @@ async def refresh_favorites():
     return library_sync.start_refresh()
 
 
+@app.get("/api/library/sync-status")
+async def library_sync_status():
+    """Whether the favorites sync is still running — the frontend polls this
+    after kicking a refresh so it can re-render unread counts when new
+    chapters land."""
+    import library_sync
+    return {"running": library_sync.is_running()}
+
+
 @app.get("/api/voices")
 async def list_voices():
     """List available voices from config.yaml."""

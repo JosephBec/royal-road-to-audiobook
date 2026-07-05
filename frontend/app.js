@@ -41,9 +41,12 @@ const state = {
 
 // ===== Init =====
 document.addEventListener('DOMContentLoaded', async () => {
-    // Kick the server-side favorites sync (new chapters + pre-downloads);
-    // fire-and-forget, the server enforces its own cooldown
-    api('POST', '/api/library/refresh-favorites').catch(() => {});
+    // Kick the server-side favorites sync (new chapters + pre-downloads).
+    // If it actually starts, watch for it to finish and re-render the
+    // library so fresh chapter/unread counts show without a reload.
+    api('POST', '/api/library/refresh-favorites')
+        .then(res => { if (res && res.started) watchFavoritesSync(); })
+        .catch(() => {});
 
     await loadSettings();
     applyTheme(state.settings.theme);
@@ -123,6 +126,23 @@ function goHome() {
 }
 
 // ===== Library =====
+async function watchFavoritesSync() {
+    // Poll while the favorites sync runs (it yields to playback, so allow a
+    // generous window), then refresh the library once for new unread counts.
+    for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+            const s = await api('GET', '/api/library/sync-status');
+            if (!s.running) {
+                await loadLibrary();
+                return;
+            }
+        } catch (e) {
+            return; // server unreachable — a page reload will catch up
+        }
+    }
+}
+
 async function loadLibrary() {
     try {
         state.novels = await api('GET', '/api/novels');
@@ -171,7 +191,15 @@ function applyLibraryView() {
     document.getElementById('novel-grid').classList.toggle('novel-list', isList);
 }
 
+function unreadCount(novel) {
+    // Chapters beyond the one you're on; 0 for never-started novels
+    // (their total already says it all)
+    if (!novel.progress_chapter) return 0;
+    return Math.max(0, (novel.total_chapters || 0) - novel.progress_chapter);
+}
+
 function novelCardHtml(novel) {
+    const unread = unreadCount(novel);
     return `
         <div class="novel-card" data-id="${novel.id}">
             <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
@@ -184,7 +212,7 @@ function novelCardHtml(novel) {
                 <div class="novel-card-title">${escapeHtml(novel.title)}</div>
                 <div class="novel-card-author">${escapeHtml(novel.author)}</div>
                 <div class="novel-card-progress">
-                    <span>${novel.total_chapters} chapters</span>
+                    <span>${novel.total_chapters} chapters${unread > 0 ? ` · <span class="unread-count">${unread} unread</span>` : ''}</span>
                     ${novel.progress_chapter
                         ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                         : ''
@@ -196,6 +224,7 @@ function novelCardHtml(novel) {
 }
 
 function novelRowHtml(novel) {
+    const unread = unreadCount(novel);
     return `
         <div class="novel-card novel-card--row" data-id="${novel.id}">
             ${novel.cover_url
@@ -207,6 +236,7 @@ function novelRowHtml(novel) {
                 <div class="novel-card-author">${escapeHtml(novel.author)}</div>
             </div>
             <div class="novel-row-meta">
+                ${unread > 0 ? `<span class="unread-count">${unread} unread</span>` : ''}
                 ${novel.progress_chapter
                     ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                     : `<span class="novel-row-chapters">${novel.total_chapters} chs</span>`
@@ -340,9 +370,16 @@ async function openNovel(novelId, opts = {}) {
     cover.src = novel.cover_url || '';
     cover.style.display = novel.cover_url ? 'block' : 'none';
 
-    // Description
+    // Description: collapsed to 4 lines; show "Read more" only if it overflows
     const descEl = document.getElementById('novel-description');
     descEl.textContent = novel.description || '';
+    descEl.classList.add('clamped');
+    const descToggle = document.getElementById('desc-toggle');
+    descToggle.textContent = 'Read more';
+    requestAnimationFrame(() => {
+        descToggle.style.display =
+            descEl.scrollHeight > descEl.clientHeight + 2 ? '' : 'none';
+    });
 
     updateFavoriteButton();
 
@@ -1789,6 +1826,11 @@ function setupEventListeners() {
     });
     document.querySelectorAll('.settings-tab').forEach(btn =>
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab)));
+    document.getElementById('desc-toggle').addEventListener('click', () => {
+        const descEl = document.getElementById('novel-description');
+        const clamped = descEl.classList.toggle('clamped');
+        document.getElementById('desc-toggle').textContent = clamped ? 'Read more' : 'Show less';
+    });
     document.getElementById('modal-export').addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeExportModal();
     });

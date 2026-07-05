@@ -491,13 +491,37 @@ a:hover { color: var(--accent-hover); }
     background: var(--bg-card);
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
-    max-height: 120px;
-    overflow-y: auto;
 }
 
-.novel-description:empty {
+/* Collapsed: fixed 4-line footprint so every novel page starts the same
+   height; "Read more" expands instead of scrolling */
+.novel-description.clamped {
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.novel-description:empty,
+.novel-description.clamped:empty {
     display: none;
 }
+
+.desc-toggle {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0 16px;
+    margin-bottom: 16px;
+}
+
+.unread-count { color: var(--accent); font-weight: 600; }
+.novel-row-meta .unread-count { font-size: 0.8rem; white-space: nowrap; }
 
 .novel-info {
     display: flex;
