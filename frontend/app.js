@@ -532,7 +532,7 @@ async function refreshNovel() {
     if (!state.currentNovel) return;
     const btn = document.getElementById('btn-refresh');
     btn.disabled = true;
-    btn.textContent = '↻ Refreshing...';
+    btn.innerHTML = '↻<span class="btn-label"> Refreshing...</span>';
 
     try {
         const result = await api('POST', `/api/novels/${state.currentNovel.id}/refresh`);
@@ -540,6 +540,7 @@ async function refreshNovel() {
             showToast(`${result.new_chapters} new chapter${result.new_chapters > 1 ? 's' : ''} found!`);
             state.currentNovel.total_chapters = result.total_chapters;
             document.getElementById('novel-stats').textContent = `${result.total_chapters} chapters`;
+            loadLibrary(); // background: keep home-screen unread counts current
         } else {
             showToast('Already up to date');
         }
@@ -548,7 +549,7 @@ async function refreshNovel() {
         showToast('Refresh failed: ' + e.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = '↻ Refresh';
+        btn.innerHTML = '↻<span class="btn-label"> Refresh</span>';
     }
 }
 
