@@ -56,3 +56,54 @@ def test_parse_missing_and_invalid(tmp_path):
     bad.write_bytes(b"this is not a zip archive")
     with pytest.raises(Exception):
         epub_local.parse_epub_file(bad)
+
+
+@pytest.fixture()
+def library(tmp_path, monkeypatch):
+    from scrapers import epub_local
+    lib = tmp_path / "EPUBs"
+    lib.mkdir()
+    monkeypatch.setattr(epub_local, "EPUB_DIR", lib)
+    return lib
+
+
+def test_scraper_registered():
+    from scrapers import get_scraper_for_url
+    scraper = get_scraper_for_url("epub://Some%20Book.epub")
+    assert scraper is not None and scraper.name == "epub"
+    assert get_scraper_for_url("https://example.com/") is None  # no false match
+    assert get_scraper_for_url("https://www.royalroad.com/fiction/1/x").name == "Royal Road"
+
+
+def test_scraper_interface(library):
+    import asyncio
+    from scrapers import epub_local
+    make_epub(library / "My Book.epub", title="My Book", author="Jane Doe")
+    scraper = epub_local.EpubScraper()
+    url = epub_local.novel_url("My Book.epub")
+
+    meta = asyncio.run(scraper.scrape_novel_metadata(url))
+    assert meta["title"] == "My Book"
+    assert meta["author"] == "Jane Doe"
+    assert meta["rr_url"] == url
+    assert meta["cover_url"] is None
+
+    chapters = asyncio.run(scraper.scrape_chapter_list(url))
+    assert [c["order"] for c in chapters] == [1, 2]
+    assert chapters[0]["rr_url"] == epub_local.chapter_url("My Book.epub", 0)
+    assert chapters[0]["rr_chapter_id"] == "0"
+    assert chapters[0]["published_at"] is None
+
+    text = asyncio.run(scraper.scrape_chapter_text(chapters[1]["rr_url"]))
+    assert LONG_PARA.split()[0] in text
+
+
+def test_scraper_missing_file_and_bad_index(library):
+    import asyncio
+    from scrapers import epub_local
+    scraper = epub_local.EpubScraper()
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(scraper.scrape_chapter_text("epub://gone.epub#0"))
+    make_epub(library / "small.epub")
+    with pytest.raises(ValueError):
+        asyncio.run(scraper.scrape_chapter_text(epub_local.chapter_url("small.epub", 99)))

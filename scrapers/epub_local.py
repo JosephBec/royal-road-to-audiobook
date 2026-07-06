@@ -12,6 +12,7 @@ it as `epub_local.EPUB_DIR` — a module attribute read at call time — so test
 can monkeypatch it.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -23,6 +24,8 @@ from urllib.parse import quote, unquote
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+from scrapers.base import BaseScraper
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
@@ -227,3 +230,41 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
     if not parsed.chapters:
         raise ValueError(f"No chapters with sufficient content found in: {path.name}")
     return parsed
+
+
+class EpubScraper(BaseScraper):
+    """Reads books from the local EPUBs folder instead of the web."""
+
+    name = "epub"
+    url_patterns = [re.compile(r"^epub://")]
+
+    async def scrape_novel_metadata(self, url: str) -> dict:
+        filename = filename_from_url(url)
+        parsed = await asyncio.to_thread(parse_epub_file, EPUB_DIR / filename)
+        return {
+            "title": parsed.title,
+            "author": parsed.author,
+            "cover_url": None,  # set by epub_library once the novel row exists
+            "description": parsed.description,
+            "rr_url": novel_url(filename),
+        }
+
+    async def scrape_chapter_list(self, novel_url_: str) -> list[dict]:
+        filename = filename_from_url(novel_url_)
+        parsed = await asyncio.to_thread(parse_epub_file, EPUB_DIR / filename)
+        return [{
+            "title": ch.title,
+            "rr_url": chapter_url(filename, ch.index),
+            "rr_chapter_id": str(ch.index),
+            "order": ch.index + 1,
+            "published_at": None,
+        } for ch in parsed.chapters]
+
+    async def scrape_chapter_text(self, chapter_url_: str) -> str:
+        filename = filename_from_url(chapter_url_)
+        index = chapter_index_from_url(chapter_url_)
+        parsed = await asyncio.to_thread(parse_epub_file, EPUB_DIR / filename)
+        for ch in parsed.chapters:
+            if ch.index == index:
+                return ch.text
+        raise ValueError(f"Chapter {index} not found in {filename}")
