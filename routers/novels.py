@@ -128,6 +128,11 @@ async def set_novel_order(req: OrderRequest, db: Session = Depends(get_db)):
 @router.post("", response_model=NovelResponse, status_code=201)
 async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
     """Add a novel by URL (any site with a registered scraper)."""
+    if req.url.strip().startswith("epub://"):
+        raise HTTPException(
+            status_code=400,
+            detail="EPUB books are added by uploading a file or dropping it in the EPUBs folder, not by URL.",
+        )
     scraper = get_scraper_for_url(req.url)
     if not scraper:
         raise HTTPException(

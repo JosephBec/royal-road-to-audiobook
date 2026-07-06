@@ -92,3 +92,8 @@ def test_ui_delete_removes_file_and_cover(client, tmp_path):
     assert not (client.epub_dir / "My Book.epub").exists()
     assert not (client.epub_dir / ".covers" / "My Book.jpg").exists()
     assert all(n["id"] != body["id"] for n in client.get("/api/novels").json())
+
+
+def test_add_novel_rejects_raw_epub_url(client):
+    resp = client.post("/api/novels", json={"url": "epub://x.epub"})
+    assert resp.status_code == 400

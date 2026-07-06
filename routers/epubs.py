@@ -43,6 +43,7 @@ async def upload_epub(file: UploadFile = File(...), db: Session = Depends(get_db
     await epub_library.sync_now(filename)
     novel = db.query(Novel).filter(Novel.rr_url == epub_local.novel_url(filename)).first()
     if not novel:
+        dest.unlink(missing_ok=True)  # let a retry re-upload instead of 409ing forever
         raise HTTPException(status_code=500,
                             detail="Upload saved but registration failed — check server logs")
     logger.info("Uploaded EPUB: %s -> novel %d", filename, novel.id)
