@@ -129,6 +129,9 @@
             <h3>Add Novel</h3>
             <p>Paste a novel URL. <a href="#" id="link-supported-sites">Check the supported sites</a></p>
             <input type="text" id="input-novel-url" placeholder="https://..." autocomplete="off">
+            <p class="hint" style="text-align:center; margin:8px 0;">— or —</p>
+            <input type="file" id="input-epub-file" accept=".epub,application/epub+zip" style="display:none;">
+            <button id="btn-upload-epub" class="secondary-btn" style="width:100%;">Upload an EPUB…</button>
             <div id="add-error" class="error-msg" style="display:none;"></div>
             <div class="modal-actions">
                 <button id="btn-add-cancel" class="secondary-btn">Cancel</button>
