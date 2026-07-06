@@ -4,6 +4,7 @@ sqlalchemy==2.0.32
 httpx==0.27.0
 beautifulsoup4==4.12.3
 lxml==5.2.2
+ebooklib==0.18
 kokoro==0.8.4
 numpy==1.26.4
 soundfile==0.12.1

@@ -5,3 +5,4 @@ import tempfile
 
 _tmpdir = tempfile.mkdtemp(prefix="noveltts_test_")
 os.environ["NOVEL_TTS_DB"] = f"sqlite:///{_tmpdir}/test.db"
+os.environ["NOVEL_TTS_EPUB_DIR"] = f"{_tmpdir}/EPUBs"
