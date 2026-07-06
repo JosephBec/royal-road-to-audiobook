@@ -81,3 +81,14 @@ def test_cover_404_for_non_epub_novel(client):
     db = database.SessionLocal()
     db.query(database.Novel).filter_by(id=nid).delete()
     db.commit(); db.close()
+
+
+def test_ui_delete_removes_file_and_cover(client, tmp_path):
+    body = _upload(client, tmp_path, cover=COVER_BYTES).json()
+    assert (client.epub_dir / "My Book.epub").exists()
+    assert (client.epub_dir / ".covers" / "My Book.jpg").exists()
+
+    assert client.delete(f"/api/novels/{body['id']}").status_code == 204
+    assert not (client.epub_dir / "My Book.epub").exists()
+    assert not (client.epub_dir / ".covers" / "My Book.jpg").exists()
+    assert all(n["id"] != body["id"] for n in client.get("/api/novels").json())

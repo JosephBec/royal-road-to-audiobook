@@ -6,6 +6,7 @@ Handles adding, listing, deleting novels and refreshing chapter lists.
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -252,6 +253,17 @@ async def delete_novel(novel_id: int, db: Session = Depends(get_db)):
             job.status = "canceled"
             job.detail = "novel deleted"
             job.finished_at = datetime.now(timezone.utc)
+
+    # EPUB books: the folder is the source of truth in both directions —
+    # removing from the library also removes the file (and its cover)
+    if novel.rr_url.startswith("epub://"):
+        from scrapers import epub_local
+        import epub_library
+        filename = epub_local.filename_from_url(novel.rr_url)
+        (epub_local.EPUB_DIR / filename).unlink(missing_ok=True)
+        for cover in epub_local.covers_dir().glob(f"{Path(filename).stem}.*"):
+            cover.unlink(missing_ok=True)
+        epub_library.forget(filename)
 
     db.delete(novel)
     db.commit()
