@@ -48,6 +48,12 @@ just run `python main.py` again (or use `RoyalRoadTTS.bat`).
 **Add a novel.** Click "+ Add Novel" and paste the novel's link. Not sure which
 sites work? There's a "Check the supported sites" link right there.
 
+**Add an EPUB.** Drop an `.epub` file into the `EPUBs` folder next to the app
+(it appears in your library within seconds), or click "+ Add Novel" →
+"Upload an EPUB…" from your phone. The folder is the source of truth: delete
+the file and the book leaves your library; delete the book in the app and the
+file is removed too.
+
 **Listen.** Open a novel, tap a chapter, and it starts reading. The player at
 the bottom has play/pause, skip, and jump buttons. Your spot is saved
 automatically, and the Resume button takes you right back to it — from any
