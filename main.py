@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 
 from database import init_db, SessionLocal, retention_policy
-from routers import novels, chapters, progress, settings, exports
+from routers import novels, chapters, progress, settings, exports, epubs
 from tts import cleanup_temp_files
 
 # Configure logging
@@ -55,8 +55,11 @@ async def lifespan(app: FastAPI):
     _retention_cleanup()
     import export_worker
     export_worker.start_worker()
+    import epub_library
+    epub_library.start()
     logger.info("Novel TTS server ready.")
     yield
+    epub_library.stop()
     logger.info("Shutting down — applying audio cache retention policy...")
     _retention_cleanup()
 
@@ -88,6 +91,7 @@ app.include_router(chapters.router)
 app.include_router(progress.router)
 app.include_router(settings.router)
 app.include_router(exports.router)
+app.include_router(epubs.router)
 
 # Serve frontend static files
 FRONTEND_DIR = Path(__file__).parent / "frontend"

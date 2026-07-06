@@ -107,7 +107,7 @@ import m4b
 import plex
 import textbatch
 from database import ExportJob, Novel, Settings
-from scrapers import get_scraper_for_url
+from scrapers import epub_local, get_scraper_for_url
 
 _queue: asyncio.Queue | None = None
 _worker_task: asyncio.Task | None = None
@@ -222,15 +222,29 @@ async def _synthesize_chapter_wav(job_id, chapter_id, title, voice, speed, wav_p
 
 
 async def _download_cover(novel_id: int) -> tuple:
-    """Best-effort cover download. Returns (bytes|None, ext)."""
+    """Best-effort cover fetch. Returns (bytes|None, ext).
+
+    EPUB novels store a root-relative cover_url (served by our own API for
+    the browser's benefit) that isn't a fetchable absolute URL — read those
+    covers directly off disk instead of going through httpx.
+    """
     db = SessionLocal()
     try:
         novel = db.query(Novel).filter(Novel.id == novel_id).first()
         cover_url = novel.cover_url if novel else None
+        rr_url = novel.rr_url if novel else None
     finally:
         db.close()
     if not cover_url:
         return None, "jpg"
+    if rr_url and rr_url.startswith("epub://"):
+        stem = Path(epub_local.filename_from_url(rr_url)).stem
+        cover_path = next(epub_local.covers_dir().glob(f"{stem}.*"), None)
+        if cover_path is None:
+            logger.warning("EPUB cover file missing on disk (continuing without)")
+            return None, "jpg"
+        ext = cover_path.suffix.lstrip(".") or "jpg"
+        return cover_path.read_bytes(), ext
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(cover_url)

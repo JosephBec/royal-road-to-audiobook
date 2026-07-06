@@ -300,7 +300,11 @@ function renderLibrary() {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const id = parseInt(btn.dataset.id);
-            if (confirm('Remove this novel from your library?')) {
+            const novel = state.novels.find(n => n.id === id);
+            const msg = novel?.source === 'epub'
+                ? 'Remove this book? Its EPUB file will also be deleted from the EPUBs folder.'
+                : 'Remove this novel from your library?';
+            if (confirm(msg)) {
                 try {
                     await api('DELETE', `/api/novels/${id}`);
                     showToast('Novel removed');
@@ -379,6 +383,32 @@ async function addNovel() {
     } finally {
         loadingEl.style.display = 'none';
         confirmBtn.disabled = false;
+    }
+}
+
+async function uploadEpub(file) {
+    const errorEl = document.getElementById('add-error');
+    const loadingEl = document.getElementById('add-loading');
+    errorEl.style.display = 'none';
+    loadingEl.textContent = 'Uploading EPUB…';
+    loadingEl.style.display = 'block';
+    try {
+        const form = new FormData();
+        form.append('file', file);
+        const resp = await fetch('/api/epubs/upload', { method: 'POST', body: form });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        closeAddModal();
+        showToast('Book added!');
+        await loadLibrary();
+    } catch (e) {
+        errorEl.textContent = e.message;
+        errorEl.style.display = 'block';
+    } finally {
+        loadingEl.style.display = 'none';
+        loadingEl.textContent = 'Fetching novel info...';
     }
 }
 
@@ -1706,6 +1736,13 @@ function setupEventListeners() {
     document.getElementById('btn-add-novel').addEventListener('click', openAddModal);
     document.getElementById('btn-add-cancel').addEventListener('click', closeAddModal);
     document.getElementById('btn-add-confirm').addEventListener('click', addNovel);
+    document.getElementById('btn-upload-epub').addEventListener('click', () => {
+        document.getElementById('input-epub-file').click();
+    });
+    document.getElementById('input-epub-file').addEventListener('change', (e) => {
+        if (e.target.files.length) uploadEpub(e.target.files[0]);
+        e.target.value = '';   // allow re-selecting the same file after an error
+    });
     document.getElementById('input-novel-url').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') addNovel();
     });
