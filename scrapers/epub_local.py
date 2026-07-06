@@ -197,8 +197,18 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
 
     parsed.cover, parsed.cover_ext = extract_cover_image(book)
 
+    documents = []
+    for idref, _linear in book.spine:
+        item = book.get_item_with_id(idref)
+        if item is not None and item.get_type() == ebooklib.ITEM_DOCUMENT:
+            documents.append(item)
+    if not documents:
+        # Odd/malformed EPUBs whose spine doesn't resolve to any documents:
+        # fall back to manifest order rather than yielding zero chapters.
+        documents = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+
     index = 0
-    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+    for item in documents:
         try:
             content = item.get_content().decode("utf-8", errors="replace")
         except Exception as e:

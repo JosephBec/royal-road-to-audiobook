@@ -11,8 +11,16 @@ COVER_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 2000
 
 
 def make_epub(path, title="Test Book", author="Test Author",
-              chapters=None, cover=None, description=None):
-    """Write a minimal valid EPUB. `chapters` is a list of (title, [paragraphs])."""
+              chapters=None, cover=None, description=None,
+              scramble_manifest=False):
+    """Write a minimal valid EPUB. `chapters` is a list of (title, [paragraphs]).
+
+    If `scramble_manifest` is True, chapter items are added to the book (and
+    thus written to the OPF manifest) in reversed order, while `book.spine`
+    still lists them in correct reading order. ebooklib writes the manifest
+    in item-insertion order, so this produces an EPUB whose manifest order
+    differs from its spine order — useful for testing spine-order parsing.
+    """
     if chapters is None:
         chapters = [("Chapter One", [LONG_PARA]), ("Chapter Two", [LONG_PARA])]
     book = epub.EpubBook()
@@ -29,8 +37,10 @@ def make_epub(path, title="Test Book", author="Test Author",
         item = epub.EpubHtml(title=ch_title, file_name=f"ch{i}.xhtml", lang="en")
         body = "".join(f"<p>{p}</p>" for p in paragraphs)
         item.content = f"<html><body><h1>{ch_title}</h1>{body}</body></html>"
-        book.add_item(item)
         items.append(item)
+    add_order = list(reversed(items)) if scramble_manifest else items
+    for item in add_order:
+        book.add_item(item)
     book.toc = items
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
