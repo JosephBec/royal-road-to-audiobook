@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from database import get_db, Novel, Chapter, Progress, Settings, effective_settings
@@ -55,8 +55,7 @@ class NovelResponse(BaseModel):
     settings: dict | None = None
     effective_settings: dict | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 def _novel_settings_payload(novel: Novel, db: Session) -> dict:
