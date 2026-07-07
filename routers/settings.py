@@ -7,7 +7,7 @@ Handles reading and updating app-wide settings (voice, speed, playback mode).
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from database import get_db, Settings, Novel
@@ -29,8 +29,7 @@ class SettingsResponse(BaseModel):
     plex_token: str
     plex_section_id: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UpdateSettingsRequest(BaseModel):
