@@ -13,7 +13,9 @@ Usage:
 
 import argparse
 import logging
+import subprocess
 import yaml
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -35,6 +37,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _git_sha() -> str:
+    """Short SHA of the running code, so you can tell what's actually live
+    (the tray launches main.py as a child — easy to run a stale build)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).parent, capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip() or "unknown"
+    except Exception:
+        pass
+    return "unknown"
+
+
+APP_VERSION = _git_sha()
+STARTED_AT: datetime | None = None
+
+
 def _retention_cleanup():
     """Apply the retention policy: in-progress chapters and favorites' next-3
     kept forever, non-favorites' next-3 kept while fresh, the rest deleted."""
@@ -49,6 +70,8 @@ def _retention_cleanup():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup, clean temp files on startup/shutdown."""
+    global STARTED_AT
+    STARTED_AT = datetime.now(timezone.utc)
     logger.info("Initializing database...")
     init_db()
     logger.info("Applying audio cache retention policy...")
@@ -59,7 +82,8 @@ async def lifespan(app: FastAPI):
     prefetch.start_worker()
     import epub_library
     epub_library.start()
-    logger.info("Novel TTS server ready.")
+    logger.info("Novel TTS server ready (version=%s, started %s).",
+                APP_VERSION, STARTED_AT.isoformat())
     yield
     prefetch.stop()
     epub_library.stop()
@@ -114,6 +138,16 @@ async def serve_index():
         (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
     ))
     return HTMLResponse(html.replace("__V__", str(version)))
+
+
+@app.get("/api/version")
+async def version():
+    """Running code's git SHA and process start time — so you can confirm
+    which build is actually live (the tray runs main.py as a child)."""
+    return {
+        "git_sha": APP_VERSION,
+        "started_at": STARTED_AT.isoformat() if STARTED_AT else None,
+    }
 
 
 @app.post("/api/library/refresh-favorites")
