@@ -36,6 +36,10 @@ _pipeline: Optional[KPipeline] = None
 _pipeline_lock = asyncio.Lock()
 _pipeline_device: Optional[str] = None
 
+# Per-chapter locks so concurrent callers (playback + prefetch worker) never
+# synthesize the same chapter twice — the second awaits and reuses the file.
+_synth_locks: dict[int, asyncio.Lock] = {}
+
 
 def get_device() -> str:
     """Detect the best available device."""
@@ -195,27 +199,41 @@ async def synthesize_chapter_to_file(
         logger.info("Chapter %d already synthesized: %s", chapter_id, output_path)
         return output_path
 
-    logger.info("Synthesizing chapter %d to file (voice=%s, speed=%.1f)", chapter_id, voice, speed)
-    start = time.time()
+    # Serialize concurrent requests for the same chapter: whoever gets the lock
+    # first synthesizes; the rest re-check and reuse the finished file.
+    lock = _synth_locks.setdefault(chapter_id, asyncio.Lock())
+    async with lock:
+        try:
+            if output_path.exists():
+                logger.info("Chapter %d already synthesized: %s", chapter_id, output_path)
+                return output_path
 
-    pipeline = await get_pipeline(voice)
-    loop = asyncio.get_event_loop()
-    segments = await loop.run_in_executor(
-        _executor,
-        _synthesize_text_blocking, pipeline, text, voice, speed
-    )
+            logger.info("Synthesizing chapter %d to file (voice=%s, speed=%.1f)", chapter_id, voice, speed)
+            start = time.time()
 
-    wav_bytes = _segments_to_wav_bytes(segments)
-    output_path.write_bytes(wav_bytes)
+            pipeline = await get_pipeline(voice)
+            loop = asyncio.get_event_loop()
+            segments = await loop.run_in_executor(
+                _executor,
+                _synthesize_text_blocking, pipeline, text, voice, speed
+            )
 
-    elapsed = time.time() - start
-    duration = sum(len(s) for s in segments) / SAMPLE_RATE
-    logger.info(
-        "Chapter %d synthesized: %.1fs audio in %.1fs (%.1fx realtime)",
-        chapter_id, duration, elapsed, duration / elapsed if elapsed > 0 else 0
-    )
+            wav_bytes = _segments_to_wav_bytes(segments)
+            output_path.write_bytes(wav_bytes)
 
-    return output_path
+            elapsed = time.time() - start
+            duration = sum(len(s) for s in segments) / SAMPLE_RATE
+            logger.info(
+                "Chapter %d synthesized: %.1fs audio in %.1fs (%.1fx realtime)",
+                chapter_id, duration, elapsed, duration / elapsed if elapsed > 0 else 0
+            )
+
+            return output_path
+        finally:
+            # Safe to drop: the file now exists, so any waiter re-checks and
+            # returns, and later callers short-circuit on the top-level
+            # exists() guard before ever touching the lock. Bounds dict growth.
+            _synth_locks.pop(chapter_id, None)
 
 
 async def synthesize_batch(text: str, voice: str, speed: float) -> list[np.ndarray]:
