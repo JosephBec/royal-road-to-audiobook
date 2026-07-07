@@ -17,6 +17,7 @@ from database import (
     effective_settings, retention_policy,
 )
 from scrapers import get_scraper_for_url
+import prefetch
 import tts
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,6 @@ def start_refresh() -> dict:
 def is_running() -> bool:
     """True while a favorites sync pass is active (exports yield to it)."""
     return _task is not None and not _task.done()
-
-
-async def _wait_for_interactive_idle():
-    """Don't hog the TTS thread while the user is waiting on a chapter."""
-    while tts.interactive_busy():
-        await asyncio.sleep(2)
 
 
 def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
@@ -138,17 +133,6 @@ async def _sync_novel(novel_id: int):
     finally:
         db.close()
 
-    # 3. Pre-download missing audio, yielding to interactive playback
-    for ch_id, ch_url, ch_title in target_data:
-        if tts.temp_path_for_chapter(ch_id).exists():
-            continue
-        await _wait_for_interactive_idle()
-        ch_scraper = get_scraper_for_url(ch_url)
-        if not ch_scraper:
-            continue
-        try:
-            text = await ch_scraper.scrape_chapter_text(ch_url)
-            await tts.synthesize_chapter_to_file(ch_id, f"{ch_title}\n\n{text}", voice, 1.0)
-            logger.info("Pre-downloaded %s — %s", title, ch_title)
-        except Exception:
-            logger.exception("Pre-download failed for chapter %d (%s)", ch_id, title)
+    # 3. Hand render-ahead to the single prefetch worker (dedups against
+    #    playback-triggered prefetch so nothing is synthesized twice).
+    prefetch.enqueue(target_data, voice)

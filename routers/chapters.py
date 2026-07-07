@@ -19,6 +19,7 @@ from database import (
     get_db, Novel, Chapter, Settings, Progress,
     effective_settings, retention_policy, SessionLocal,
 )
+import prefetch
 from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
@@ -235,21 +236,10 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     prefetch_targets = [(c.id, c.rr_url, c.title) for c in next_chapters]
 
     async def _after_synthesis():
-        """Pre-download the next 3 chapters, then apply retention cleanup."""
-        for pf_id, pf_url, pf_title in prefetch_targets:
-            if temp_path_for_chapter(pf_id).exists():
-                continue
-            db2 = SessionLocal()
-            try:
-                pf_chapter = db2.query(Chapter).filter(Chapter.id == pf_id).first()
-                if not pf_chapter:
-                    continue
-                pf_text = await get_chapter_text(pf_chapter, db2)
-                await synthesize_chapter_to_file(pf_id, f"{pf_title}\n\n{pf_text}", voice, 1.0)
-            except Exception as e:
-                logger.warning("Prefetch failed for chapter %s: %s", pf_id, e)
-            finally:
-                db2.close()
+        """Queue the next chapters for render-ahead, then apply retention cleanup."""
+        # Single prefetch worker owns render-ahead; it dedups against the
+        # favorites sync so a chapter is never synthesized twice.
+        prefetch.enqueue(prefetch_targets, voice)
         db2 = SessionLocal()
         try:
             forever, expiring = retention_policy(db2)
