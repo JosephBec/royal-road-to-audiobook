@@ -9,8 +9,10 @@ import pytest
 
 @pytest.fixture()
 def pf_env(tmp_path, monkeypatch):
+    import database
     import tts
     import prefetch
+    database.init_db()  # _fetch_text opens a session; no chapter rows → scrape path
     monkeypatch.setattr(tts, "TEMP_DIR", tmp_path)
 
     synth_calls = []

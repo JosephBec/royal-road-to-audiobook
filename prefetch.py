@@ -15,8 +15,9 @@ directly). When the queue drains, retention cleanup runs once.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
-from database import SessionLocal, retention_policy
+from database import SessionLocal, Chapter, retention_policy
 from scrapers import get_scraper_for_url
 import tts
 
@@ -44,9 +45,15 @@ def reset():
 
 
 def start_worker():
-    """Create the queue and launch the singleton worker task."""
-    global _worker_task
-    _ensure_queue()
+    """Create a fresh queue bound to the current loop and launch the worker.
+
+    Always makes a new queue (never reuses one that may be bound to a
+    closed loop, e.g. across TestClient app instances).
+    """
+    global _queue, _worker_task
+    _queue = asyncio.Queue()
+    _pending.clear()
+    _inflight.clear()
     _worker_task = asyncio.create_task(_worker_loop())
     logger.info("Prefetch worker started")
 
@@ -83,6 +90,33 @@ async def _wait_for_interactive_idle():
         await asyncio.sleep(2)
 
 
+async def _fetch_text(chapter_id: int, url: str) -> str | None:
+    """Chapter body from the DB cache, else scrape once and store it.
+
+    Mirrors routers.chapters.get_chapter_text so prefetch honors the same
+    "scrape once, ever" cache. Falls back to a plain scrape if the chapter
+    row is absent.
+    """
+    db = SessionLocal()
+    try:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        if chapter is not None and chapter.text:
+            return chapter.text
+        scraper = get_scraper_for_url(url)
+        if not scraper:
+            logger.warning("No scraper for prefetch target %s", url)
+            return None
+        text = await scraper.scrape_chapter_text(url)
+        if chapter is not None:
+            chapter.text = text
+            chapter.word_count = len(text.split())
+            chapter.fetched_at = datetime.now(timezone.utc)
+            db.commit()
+        return text
+    finally:
+        db.close()
+
+
 async def _process_one(item: tuple[int, str, str, str]):
     chapter_id, url, title, voice = item
     _inflight.add(chapter_id)
@@ -90,11 +124,9 @@ async def _process_one(item: tuple[int, str, str, str]):
         if tts.temp_path_for_chapter(chapter_id).exists():
             return
         await _wait_for_interactive_idle()
-        scraper = get_scraper_for_url(url)
-        if not scraper:
-            logger.warning("No scraper for prefetch target %s", url)
+        text = await _fetch_text(chapter_id, url)
+        if text is None:
             return
-        text = await scraper.scrape_chapter_text(url)
         await tts.synthesize_chapter_to_file(chapter_id, f"{title}\n\n{text}", voice, 1.0)
         logger.info("Prefetched chapter %d — %s", chapter_id, title)
     except Exception:

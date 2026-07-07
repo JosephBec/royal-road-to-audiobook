@@ -55,10 +55,13 @@ async def lifespan(app: FastAPI):
     _retention_cleanup()
     import export_worker
     export_worker.start_worker()
+    import prefetch
+    prefetch.start_worker()
     import epub_library
     epub_library.start()
     logger.info("Novel TTS server ready.")
     yield
+    prefetch.stop()
     epub_library.stop()
     logger.info("Shutting down — applying audio cache retention policy...")
     _retention_cleanup()

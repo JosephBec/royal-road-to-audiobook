@@ -14,6 +14,7 @@ from pathlib import Path
 
 from database import SessionLocal, Chapter, Progress
 import library_sync
+import prefetch
 import tts
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,8 @@ def _export_may_proceed(db) -> bool:
     """Export priority gate: everything else outranks exports."""
     return (not tts.interactive_busy()
             and not _active_listener_debt(db)
-            and not library_sync.is_running())
+            and not library_sync.is_running()
+            and not prefetch.is_busy())
 
 
 async def _wait_for_export_turn(job_id: int):
