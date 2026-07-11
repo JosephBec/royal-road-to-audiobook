@@ -16,8 +16,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-ci.txt
 
-      - name: Install libsndfile (soundfile's runtime dependency)
-        run: sudo apt-get update && sudo apt-get install -y libsndfile1
+      - name: Install system deps (libsndfile for soundfile, ffmpeg for M4B tests)
+        run: sudo apt-get update && sudo apt-get install -y libsndfile1 ffmpeg
 
       - name: Install light dependencies (no torch/kokoro)
         run: pip install -r requirements-ci.txt
