@@ -364,8 +364,7 @@ a:hover { color: var(--accent-hover); }
     height: auto;
 }
 .novel-card--row .novel-card-fav { color: var(--text-primary); }
-.novel-card--row .novel-card-delete { display: none; }
-.novel-card--row:hover .novel-card-delete { display: flex; }
+.novel-card--row .novel-card-delete { display: flex; }
 
 /* ===== Settings tabs + voice demos ===== */
 .settings-tabs {
@@ -441,12 +440,16 @@ a:hover { color: var(--accent-hover); }
     height: 28px;
     font-size: 0.9rem;
     cursor: pointer;
-    display: none;
+    /* Always visible and above the cover art. Without z-index the button
+       renders behind the cover image (it precedes the cover in the DOM),
+       so it was invisible on every device — the fav star only shows
+       because it sets z-index: 2. */
+    display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 2;
 }
 .novel-card { position: relative; }
-.novel-card:hover .novel-card-delete { display: flex; }
 
 .empty-state {
     text-align: center;
@@ -752,6 +755,14 @@ a:hover { color: var(--accent-hover); }
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
+}
+
+.player-chapter-link {
+    color: var(--accent);
+    text-decoration: none;
+    margin-left: 6px;
+    font-size: 0.95em;
+    flex-shrink: 0;
 }
 
 .player-scrub {

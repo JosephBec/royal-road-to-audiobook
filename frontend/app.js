@@ -413,12 +413,22 @@ async function uploadEpub(file) {
 }
 
 // ===== Novel Detail =====
+// Which chapter-list page (50/page) holds a given chapter order, honoring sort.
+function pageForOrder(order, total, sort, perPage = 50) {
+    if (!order) return 1;
+    return sort === 'desc'
+        ? Math.max(1, Math.ceil(((total || order) - order + 1) / perPage))
+        : Math.max(1, Math.ceil(order / perPage));
+}
+
 async function openNovel(novelId, opts = {}) {
     const novel = state.novels.find(n => n.id === novelId);
     if (!novel) return;
 
     state.currentNovel = novel;
-    state.chapterPage = 1;
+    // Open to the page holding the chapter you're on, not always page 1.
+    const _sort = novel.effective_settings?.chapter_sort || state.settings.chapter_sort || 'asc';
+    state.chapterPage = pageForOrder(novel.progress_chapter, novel.total_chapters, _sort);
 
     // Switch views
     document.getElementById('library-view').classList.remove('active');
@@ -446,9 +456,13 @@ async function openNovel(novelId, opts = {}) {
 
     updateFavoriteButton();
 
-    // Source site link (opens the scraped page in a new tab)
+    // Source site link (opens the scraped page in a new tab). EPUBs have an
+    // epub:// pseudo-URL with no web page, so show a plain label instead.
+    const isWebNovel = /^https?:\/\//.test(novel.rr_url || '');
     document.getElementById('novel-source').innerHTML = novel.source
-        ? `From <a href="${escapeHtml(novel.rr_url)}" target="_blank" rel="noopener">${escapeHtml(novel.source)} ↗</a>`
+        ? (isWebNovel
+            ? `From <a href="${escapeHtml(novel.rr_url)}" target="_blank" rel="noopener">${escapeHtml(novel.source)} ↗</a>`
+            : `From ${escapeHtml(novel.source)}`)
         : '';
 
     // Auto-refresh chapters on open — favorites only; non-favorites are
@@ -684,6 +698,16 @@ async function playChapter(chapter, novel = state.currentNovel) {
 
     document.getElementById('player-novel-title').textContent = novel.title;
     document.getElementById('player-chapter-title').textContent = chapter.title;
+
+    // "Open on website" link — real web chapters only, not local EPUBs.
+    const chapterLink = document.getElementById('player-chapter-link');
+    if (chapter.rr_url && /^https?:\/\//.test(chapter.rr_url)) {
+        chapterLink.href = chapter.rr_url;
+        chapterLink.style.display = '';
+    } else {
+        chapterLink.removeAttribute('href');
+        chapterLink.style.display = 'none';
+    }
     document.getElementById('player-current-time').textContent = '0:00';
     document.getElementById('player-duration').textContent = '--:--';
     document.getElementById('player-scrubbar').value = 0;
@@ -1058,11 +1082,8 @@ async function followPlaybackPage(target) {
     // different page, follow it so the visible list tracks playback.
     if (state.currentNovel?.id !== state.playback.novel?.id) return;
     if (state.chapters.some(c => c.id === target.id)) return;
-    const perPage = 50;
     const sort = state.currentNovel.effective_settings?.chapter_sort || state.settings.chapter_sort;
-    state.chapterPage = sort === 'desc'
-        ? Math.max(1, Math.ceil((state.chapterTotal - target.order + 1) / perPage))
-        : Math.max(1, Math.ceil(target.order / perPage));
+    state.chapterPage = pageForOrder(target.order, state.chapterTotal, sort);
     await loadChapters();
     markCurrentChapter(target.id);
 }
