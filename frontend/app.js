@@ -1065,10 +1065,26 @@ function seekRelative(seconds) {
 }
 
 async function playAdjacentChapter(direction) {
-    const { chapter, chapters, novel } = state.playback;
+    const { chapter, novel } = state.playback;
     if (!chapter || !novel) return;
 
-    const target = chapters.find(c => c.order === chapter.order + direction);
+    // Step by position in the ascending queue, not by order arithmetic — orders
+    // can have gaps/duplicates after a stub+refresh, which would break order±1.
+    let chapters = state.playback.chapters;
+    let idx = chapters.findIndex(c => c.id === chapter.id);
+    let target = idx === -1 ? null : chapters[idx + direction];
+
+    // No next chapter in the queue? It may be stale (chapters added since it
+    // loaded). Reload once and retry before giving up.
+    if (!target && direction > 0) {
+        try {
+            state.playback.chapters = await loadPlaybackQueue(novel.id);
+            chapters = state.playback.chapters;
+            idx = chapters.findIndex(c => c.id === chapter.id);
+            target = idx === -1 ? null : chapters[idx + direction];
+        } catch (e) { /* keep the original "no next chapter" message below */ }
+    }
+
     if (!target) {
         showToast(direction > 0 ? 'No next chapter' : 'No previous chapter');
         return;
@@ -1163,6 +1179,10 @@ function setupAudioEvents() {
     });
 
     audio.addEventListener('error', () => {
+        // Instant Play swaps audio.src between segments and polls for not-yet-
+        // ready ones; those transient errors are handled by the segment loop,
+        // so don't surface a toast for them.
+        if (state._instantActive) return;
         loadingEl.style.display = 'none';
         showToast('Audio playback error');
     });

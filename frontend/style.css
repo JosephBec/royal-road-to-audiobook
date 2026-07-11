@@ -364,7 +364,7 @@ a:hover { color: var(--accent-hover); }
     height: auto;
 }
 .novel-card--row .novel-card-fav { color: var(--text-primary); }
-.novel-card--row .novel-card-delete { display: flex; }
+/* Row delete inherits the opacity reveal + favorited-hide from the base rules. */
 
 /* ===== Settings tabs + voice demos ===== */
 .settings-tabs {
@@ -440,16 +440,20 @@ a:hover { color: var(--accent-hover); }
     height: 28px;
     font-size: 0.9rem;
     cursor: pointer;
-    /* Always visible and above the cover art. Without z-index the button
-       renders behind the cover image (it precedes the cover in the DOM),
-       so it was invisible on every device — the fav star only shows
-       because it sets z-index: 2. */
+    /* Revealed on hover (desktop) / tap (mobile sticky-hover), like the ☆.
+       z-index:2 keeps it above the cover art — without it the button renders
+       behind the cover (it precedes the cover in the DOM) and is invisible. */
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 2;
+    opacity: 0;
+    transition: opacity 0.12s;
 }
 .novel-card { position: relative; }
+.novel-card:hover .novel-card-delete { opacity: 1; }
+/* Favorited novels show no delete X (unfavorite first, or remove elsewhere). */
+.novel-card-fav.is-fav ~ .novel-card-delete { display: none; }
 
 .empty-state {
     text-align: center;
