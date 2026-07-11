@@ -62,8 +62,13 @@ def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
                 rr_url=ch_data["rr_url"],
                 published_at=ch_data.get("published_at"),
             ))
+            existing_urls.add(ch_data["rr_url"])
             new_count += 1
-    novel.total_chapters = len(chapter_list)
+    # Count what we actually have, not the crawl length. Authors "stub" novels
+    # (pull chapters for Amazon exclusivity), so a later crawl can be shorter
+    # than the library. We never delete stored chapters, and the count must
+    # never drop below them.
+    novel.total_chapters = len(existing_urls)
     novel.last_refreshed = datetime.now(timezone.utc)
     db.commit()
     return new_count
