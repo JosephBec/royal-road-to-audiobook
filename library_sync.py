@@ -51,6 +51,11 @@ def is_running() -> bool:
 def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
     """Insert newly scraped chapters; returns how many were new."""
     existing_urls = {ch.rr_url for ch in novel.chapters}
+    # New chapters are appended after the current max order, NOT given the
+    # crawl's positional order. After a stub the crawl re-indexes from 1, so
+    # trusting ch_data["order"] would collide new chapters with existing ones
+    # (two chapters sharing an order breaks next/prev and play ordering).
+    next_order = max((ch.order for ch in novel.chapters), default=0) + 1
     new_count = 0
     for ch_data in chapter_list:
         if ch_data["rr_url"] not in existing_urls:
@@ -58,11 +63,12 @@ def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
                 novel_id=novel.id,
                 rr_chapter_id=ch_data["rr_chapter_id"],
                 title=ch_data["title"],
-                order=ch_data["order"],
+                order=next_order,
                 rr_url=ch_data["rr_url"],
                 published_at=ch_data.get("published_at"),
             ))
             existing_urls.add(ch_data["rr_url"])
+            next_order += 1
             new_count += 1
     # Count what we actually have, not the crawl length. Authors "stub" novels
     # (pull chapters for Amazon exclusivity), so a later crawl can be shorter

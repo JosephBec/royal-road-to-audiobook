@@ -51,6 +51,29 @@ def test_idempotent_second_sync_adds_nothing(novel):
     assert n.total_chapters == 3
 
 
+def test_new_chapters_get_collision_free_orders(novel):
+    """After a stub the crawl re-indexes from 1. New chapters must be appended
+    after the existing max order, never reusing an order already in the library."""
+    db, database, n = novel  # stored: ch1 (order 1), ch2 (order 2)
+
+    def _ch_url(i):
+        return {"title": f"C{i}", "order": 1,  # crawl gives everything order 1 upward
+                "rr_chapter_id": str(i),
+                "rr_url": f"https://www.royalroad.com/fiction/500/sync/chapter/{i}/c",
+                "published_at": None}
+
+    # A post-stub crawl returns existing ch2 (now "order 1") plus new ch3 ("order 2").
+    incoming = [dict(_ch_url(2), order=1), dict(_ch_url(3), order=2)]
+    new_count = library_sync.sync_chapter_list(db, n, incoming)
+    assert new_count == 1
+
+    orders = [c.order for c in db.query(database.Chapter).filter_by(novel_id=n.id).all()]
+    assert len(orders) == len(set(orders)), f"order collision: {orders}"
+    ch3 = db.query(database.Chapter).filter_by(
+        rr_url="https://www.royalroad.com/fiction/500/sync/chapter/3/c").first()
+    assert ch3.order == 3  # appended after existing max (2), not the crawl's order 2
+
+
 def test_stub_shorter_crawl_does_not_shrink_or_delete(novel):
     """Stubbing: a later crawl returns fewer chapters than we've stored.
     We must keep every stored chapter and never let the count drop below them."""
