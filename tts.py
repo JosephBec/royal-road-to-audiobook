@@ -5,6 +5,8 @@ Kokoro TTS synthesis with streaming support and temp file management.
 Handles both Mode A (streaming) and Mode B (wait-for-file) playback.
 """
 
+from __future__ import annotations
+
 import asyncio
 import io
 import logging
@@ -15,12 +17,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import numpy as np
 import soundfile as sf
-import torch
-from kokoro import KPipeline
+
+# torch and kokoro are heavy ML deps (hundreds of MB) and are only needed for
+# actual synthesis. They're imported lazily inside get_device/get_pipeline so
+# that importing this module (e.g. to run the mock-based test suite in CI)
+# doesn't require them.
+if TYPE_CHECKING:
+    from kokoro import KPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +50,7 @@ _synth_locks: dict[int, asyncio.Lock] = {}
 
 def get_device() -> str:
     """Detect the best available device."""
+    import torch
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
         vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
@@ -52,8 +60,9 @@ def get_device() -> str:
     return "cpu"
 
 
-async def get_pipeline(voice: str = "af_heart") -> KPipeline:
+async def get_pipeline(voice: str = "af_heart") -> "KPipeline":
     """Get or create the Kokoro pipeline singleton."""
+    from kokoro import KPipeline
     global _pipeline, _pipeline_device
     async with _pipeline_lock:
         if _pipeline is None:
