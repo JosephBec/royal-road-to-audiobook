@@ -51,8 +51,16 @@ def test_idempotent_second_sync_adds_nothing(novel):
     assert n.total_chapters == 3
 
 
-def test_total_reflects_incoming_list(novel):
-    db, database, n = novel
-    # Even with no new chapters, total_chapters tracks the incoming list length.
-    library_sync.sync_chapter_list(db, n, [_ch(1)])
-    assert n.total_chapters == 1
+def test_stub_shorter_crawl_does_not_shrink_or_delete(novel):
+    """Stubbing: a later crawl returns fewer chapters than we've stored.
+    We must keep every stored chapter and never let the count drop below them."""
+    db, database, n = novel  # starts with chapters 1 and 2 stored
+    # Grow to 3, then simulate the author stubbing chapter 3 away at the source.
+    library_sync.sync_chapter_list(db, n, [_ch(1), _ch(2), _ch(3)])
+    assert n.total_chapters == 3
+
+    removed = library_sync.sync_chapter_list(db, n, [_ch(1), _ch(2)])  # ch3 gone from source
+    assert removed == 0
+    assert n.total_chapters == 3          # count reflects the library, not the crawl
+    stored = db.query(database.Chapter).filter_by(novel_id=n.id).count()
+    assert stored == 3                    # chapter 3 is still playable
