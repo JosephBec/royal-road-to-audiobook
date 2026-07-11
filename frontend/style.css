@@ -364,7 +364,7 @@ a:hover { color: var(--accent-hover); }
     height: auto;
 }
 .novel-card--row .novel-card-fav { color: var(--text-primary); }
-/* Row delete inherits the opacity reveal + favorited-hide from the base rules. */
+/* Row delete inherits the opacity hover-reveal from the base rules. */
 
 /* ===== Settings tabs + voice demos ===== */
 .settings-tabs {
@@ -452,8 +452,6 @@ a:hover { color: var(--accent-hover); }
 }
 .novel-card { position: relative; }
 .novel-card:hover .novel-card-delete { opacity: 1; }
-/* Favorited novels show no delete X (unfavorite first, or remove elsewhere). */
-.novel-card-fav.is-fav ~ .novel-card-delete { display: none; }
 
 .empty-state {
     text-align: center;
