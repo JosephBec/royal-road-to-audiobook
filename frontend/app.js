@@ -549,7 +549,7 @@ function renderChapters() {
 
     list.innerHTML = state.chapters.map(ch => `
         <div class="chapter-row ${ch.is_current ? 'current' : ''}" data-id="${ch.id}">
-            <span class="chapter-number">${ch.order}</span>
+            <span class="chapter-number">${ch.chapter_number ?? ch.order}</span>
             <span class="chapter-title-text">${escapeHtml(ch.title)}</span>
             ${ch.word_count ? `<span class="chapter-meta">${(ch.word_count / 1000).toFixed(1)}k words</span>` : ''}
             ${ch.is_current ? '<span class="current-badge">Current</span>' : ''}

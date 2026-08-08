@@ -48,7 +48,9 @@ def test_upload_registers_book(client, tmp_path):
     novels = client.get("/api/novels").json()
     mine = next(n for n in novels if n["id"] == body["id"])
     assert mine["source"] == "epub"
-    assert mine["cover_url"] == f"/api/epubs/{body['id']}/cover"
+    # Cover URLs carry a content hash: SQLite reuses novel ids, so a bare
+    # path would serve a deleted book's cover from browser cache.
+    assert mine["cover_url"].startswith(f"/api/epubs/{body['id']}/cover?v=")
     assert client.get(f"/api/epubs/{body['id']}/cover").status_code == 200
 
 

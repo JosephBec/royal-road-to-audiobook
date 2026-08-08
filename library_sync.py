@@ -49,7 +49,16 @@ def is_running() -> bool:
 
 
 def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
-    """Insert newly scraped chapters; returns how many were new."""
+    """Insert newly scraped chapters; returns how many were new.
+
+    Identity is the site's own chapter id, NOT the URL. Royal Road URLs embed
+    the fiction slug, and authors rename fictions (e.g. adding a stubbing
+    notice), which rewrites every chapter URL at once. Keying on the URL made
+    that look like a few hundred brand-new chapters and re-imported the whole
+    back catalogue — doubling the library and inflating unread counts. When a
+    known chapter shows up under a new URL we just update the stored one.
+    """
+    by_chapter_id = {ch.rr_chapter_id: ch for ch in novel.chapters if ch.rr_chapter_id}
     existing_urls = {ch.rr_url for ch in novel.chapters}
     # New chapters are appended after the current max order, NOT given the
     # crawl's positional order. After a stub the crawl re-indexes from 1, so
@@ -57,19 +66,44 @@ def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
     # (two chapters sharing an order breaks next/prev and play ordering).
     next_order = max((ch.order for ch in novel.chapters), default=0) + 1
     new_count = 0
+    renamed = 0
     for ch_data in chapter_list:
-        if ch_data["rr_url"] not in existing_urls:
-            db.add(Chapter(
-                novel_id=novel.id,
-                rr_chapter_id=ch_data["rr_chapter_id"],
-                title=ch_data["title"],
-                order=next_order,
-                rr_url=ch_data["rr_url"],
-                published_at=ch_data.get("published_at"),
-            ))
-            existing_urls.add(ch_data["rr_url"])
-            next_order += 1
-            new_count += 1
+        site_id = ch_data.get("rr_chapter_id")
+        url = ch_data["rr_url"]
+        known = by_chapter_id.get(site_id) if site_id else None
+
+        if known is not None:
+            # Same chapter, moved URL (slug rename). Adopt the new URL unless
+            # some other row already holds it, which would break the
+            # (novel_id, rr_url) unique constraint.
+            if known.rr_url != url and url not in existing_urls:
+                existing_urls.discard(known.rr_url)
+                known.rr_url = url
+                existing_urls.add(url)
+                renamed += 1
+            continue
+
+        if url in existing_urls:
+            continue  # no site id to match on, but we already have this URL
+
+        chapter = Chapter(
+            novel_id=novel.id,
+            rr_chapter_id=site_id,
+            title=ch_data["title"],
+            order=next_order,
+            chapter_number=ch_data.get("chapter_number"),
+            rr_url=url,
+            published_at=ch_data.get("published_at"),
+        )
+        db.add(chapter)
+        existing_urls.add(url)
+        if site_id:
+            by_chapter_id[site_id] = chapter
+        next_order += 1
+        new_count += 1
+
+    if renamed:
+        logger.info("%s: %d chapter URL(s) updated after a slug change", novel.title, renamed)
     # Count what we actually have, not the crawl length. Authors "stub" novels
     # (pull chapters for Amazon exclusivity), so a later crawl can be shorter
     # than the library. We never delete stored chapters, and the count must

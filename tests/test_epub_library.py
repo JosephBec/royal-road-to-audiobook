@@ -57,7 +57,7 @@ def test_new_file_registers_after_two_stable_polls(env):
     assert len(novels) == 1
     assert novels[0]["title"] == "Book One"
     assert novels[0]["total_chapters"] == 2
-    assert novels[0]["cover_url"] == f"/api/epubs/{novels[0]['id']}/cover"
+    assert novels[0]["cover_url"].startswith(f"/api/epubs/{novels[0]['id']}/cover?v=")
     assert (lib / ".covers" / "Book One.jpg").exists()
 
 

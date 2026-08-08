@@ -63,7 +63,10 @@ class Chapter(Base):
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
     rr_chapter_id = Column(Text, nullable=True)
     title = Column(Text, nullable=False)
-    order = Column(Integer, nullable=False)
+    order = Column(Integer, nullable=False)  # position in playback order
+    # The author's own chapter number where the source states one (EPUB TOC).
+    # Separate from `order`: front matter shifts position but isn't numbered.
+    chapter_number = Column(Integer, nullable=True)
     rr_url = Column(Text, nullable=False)
     word_count = Column(Integer, default=0)
     published_at = Column(DateTime, nullable=True)
@@ -144,6 +147,7 @@ def _migrate_schema():
         },
         "chapters": {
             "text": "TEXT",
+            "chapter_number": "INTEGER",
         },
         "export_jobs": {
             "engine": "TEXT",
@@ -240,6 +244,18 @@ def init_db():
                 dirty = True
             if dirty:
                 db.commit()
+
+        # Heal libraries damaged by the old URL-keyed chapter dedup (see
+        # chapter_repair). No-op once clean, so it is safe on every startup.
+        import chapter_repair
+        reports = chapter_repair.repair_all(db, Chapter, Novel, Progress)
+        if reports:
+            stale = chapter_repair.orphaned_audio_ids(reports)
+            try:
+                from tts import remove_chapter_audio
+                remove_chapter_audio(stale)
+            except Exception:  # audio cleanup must never block startup
+                pass
     finally:
         db.close()
 

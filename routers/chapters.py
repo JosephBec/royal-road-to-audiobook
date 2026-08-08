@@ -64,6 +64,9 @@ class ChapterResponse(BaseModel):
     novel_id: int
     title: str
     order: int
+    # The author's own number where the source states one (EPUB TOC). Differs
+    # from `order` when a book has front matter, which occupies no number.
+    chapter_number: int | None = None
     rr_url: str
     word_count: int
     published_at: str | None
@@ -118,6 +121,7 @@ async def list_chapters(
                 novel_id=ch.novel_id,
                 title=ch.title,
                 order=ch.order,
+                chapter_number=ch.chapter_number,
                 rr_url=ch.rr_url,
                 word_count=ch.word_count or 0,
                 published_at=ch.published_at.isoformat() if ch.published_at else None,

@@ -43,6 +43,39 @@ def covers_dir() -> Path:
     return EPUB_DIR / ".covers"
 
 
+def cover_file(stem: str) -> Path | None:
+    """The stored cover for a book stem, whatever extension it was saved with."""
+    return next(iter(sorted(covers_dir().glob(f"{glob_escape(stem)}.*"))), None)
+
+
+def glob_escape(value: str) -> str:
+    """Escape glob metacharacters so a filename is matched literally.
+
+    Book titles genuinely contain [ ] ? * — "1% Lifesteal [Book 3]" would
+    otherwise be read as a character class and match nothing.
+    """
+    return "".join(f"[{c}]" if c in "[]*?" else c for c in value)
+
+
+def cover_version(stem: str) -> str:
+    """Short content hash of a cover, used to bust browser caches.
+
+    Novel ids are reused by SQLite after a delete, so `/api/epubs/16/cover`
+    can legitimately mean two different books over time. Without a
+    content-derived token the browser happily serves the previous book's
+    artwork from cache at an identical URL.
+    """
+    import hashlib
+
+    path = cover_file(stem)
+    if path is None:
+        return "0"
+    try:
+        return hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "0"
+
+
 # ===== Pseudo-URL helpers =====
 
 def novel_url(filename: str) -> str:
@@ -69,6 +102,10 @@ class ParsedChapter:
     text: str
     index: int
     word_count: int = 0
+    # The author's own chapter number, taken from the TOC label ("12. Vacation"
+    # -> 12). None for front/back matter and for books with no usable TOC.
+    # Distinct from `index`, which is position in playback order.
+    number: int | None = None
 
     def __post_init__(self):
         self.word_count = len(self.text.split())
@@ -108,6 +145,70 @@ def clean_chapter_title(title: str) -> str:
         if leading == second:
             return title[match.end(1):].lstrip()
     return title
+
+
+# "12. Vacation", "Chapter 3: Maka", "Ch 7 - Sekat" -> the number.
+# Anchored so "1% Lifesteal (Volume 4)" and "Also in Series" never match.
+CHAPTER_NUMBER_RE = re.compile(
+    r"^\s*(?:chapter|chap\.?|ch\.?)?\s*(\d{1,4})\s*(?:[.\):\-–—]|\s)",
+    re.IGNORECASE,
+)
+
+
+def chapter_number_from_label(label: str) -> int | None:
+    """The author's chapter number from a TOC label, or None if it isn't one.
+
+    This is the closest thing to a universal answer: EPUB has no standard flag
+    marking a document as "a chapter", but the navigation document (EPUB 3) and
+    NCX (EPUB 2) are effectively always present, and their labels carry the
+    author's own numbering. Entries without a leading number — Copyright,
+    Contents, Dedication, Author's Note, Glossary, Volume headers — are
+    precisely the front/back matter we want to leave out of the count.
+    """
+    match = CHAPTER_NUMBER_RE.match(label or "")
+    return int(match.group(1)) if match else None
+
+
+def _toc_labels(book: epub.EpubBook) -> dict[str, str]:
+    """{href without fragment: TOC label} from the EPUB's navigation.
+
+    ebooklib exposes both the EPUB 3 nav document and the EPUB 2 NCX through
+    book.toc, flattening nested sections.
+    """
+    labels: dict[str, str] = {}
+
+    def walk(items):
+        for item in items:
+            if isinstance(item, (list, tuple)):
+                walk(item)
+            elif isinstance(item, epub.Section):
+                walk(getattr(item, "subitems", []) or [])
+            elif isinstance(item, epub.Link):
+                href = (item.href or "").split("#", 1)[0]
+                if href and href not in labels:
+                    labels[href] = item.title or ""
+
+    try:
+        walk(book.toc or [])
+    except Exception:
+        logger.exception("Could not read EPUB navigation; falling back to spine order")
+    return labels
+
+
+def _match_label(labels: dict[str, str], item_name: str) -> str | None:
+    """Find an item's TOC label, tolerating href path differences.
+
+    Nav hrefs are relative to the nav document while item names are relative to
+    the OPF root, so "chapter_1.xhtml" and "EPUB/chapter_1.xhtml" refer to the
+    same file. Compare on basename once exact matching fails.
+    """
+    if item_name in labels:
+        return labels[item_name]
+    tail = item_name.rsplit("/", 1)[-1]
+    for href, label in labels.items():
+        if href.rsplit("/", 1)[-1] == tail:
+            return label
+    return None
 
 
 def extract_chapter_title(html_content: str, fallback_title: str) -> str:
@@ -210,6 +311,15 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
         # fall back to manifest order rather than yielding zero chapters.
         documents = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
 
+    labels = _toc_labels(book)
+    # Only trust the TOC when it actually numbers things. Plenty of EPUBs have
+    # a navigation document full of unnumbered titles, and for those the old
+    # word-count heuristic is still the best available signal.
+    numbered_labels = sum(
+        1 for label in labels.values() if chapter_number_from_label(label) is not None
+    )
+    use_toc = numbered_labels >= 3
+
     index = 0
     for item in documents:
         try:
@@ -220,10 +330,21 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
         text = clean_html_to_text(content)
         if len(text.split()) < min_chapter_words:
             continue  # cover page, TOC, copyright, etc.
+
+        label = _match_label(labels, item.get_name()) if labels else None
+        number = chapter_number_from_label(label) if label else None
+        if use_toc and number is None:
+            # The TOC numbers its chapters and this document isn't one of them:
+            # a dedication, author's note, glossary or "Also in Series" page.
+            # Counting these is what shifted every chapter number.
+            logger.debug("Skipping front/back matter: %s (%r)", item.get_name(), label)
+            continue
+
         parsed.chapters.append(ParsedChapter(
-            title=extract_chapter_title(content, f"Chapter {index + 1}"),
+            title=extract_chapter_title(content, label or f"Chapter {index + 1}"),
             text=text,
             index=index,
+            number=number,
         ))
         index += 1
 
@@ -257,6 +378,7 @@ class EpubScraper(BaseScraper):
             "rr_url": chapter_url(filename, ch.index),
             "rr_chapter_id": str(ch.index),
             "order": ch.index + 1,
+            "chapter_number": ch.number,
             "published_at": None,
         } for ch in parsed.chapters]
 

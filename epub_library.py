@@ -38,11 +38,70 @@ def _lock() -> asyncio.Lock:
     return _locks.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
 
 
+def backfill_cover_versions():
+    """Add the content-hash token to cover URLs stored before versioning.
+
+    Without it those rows keep serving `/api/epubs/<id>/cover` bare, which is
+    exactly the URL a recycled novel id can collide on.
+    """
+    db = SessionLocal()
+    try:
+        updated = 0
+        for novel in db.query(Novel).filter(Novel.rr_url.like("epub://%")).all():
+            if not novel.cover_url or "?v=" in novel.cover_url:
+                continue
+            stem = Path(epub_local.filename_from_url(novel.rr_url)).stem
+            novel.cover_url = f"/api/epubs/{novel.id}/cover?v={epub_local.cover_version(stem)}"
+            updated += 1
+        if updated:
+            db.commit()
+            logger.info("Versioned %d EPUB cover URL(s)", updated)
+    finally:
+        db.close()
+
+
+def rebuild_stale_epubs():
+    """Re-register EPUB novels parsed before the TOC-based chapter detection.
+
+    Old rows counted front matter as chapters, so both the count and every
+    chapter index are wrong. Rebuilding is the only fix; progress is carried
+    over by title. No-op once every book matches its current parse.
+    """
+    import chapter_repair
+
+    db = SessionLocal()
+    try:
+        from database import Progress
+        for novel in db.query(Novel).filter(Novel.rr_url.like("epub://%")).all():
+            filename = epub_local.filename_from_url(novel.rr_url)
+            path = epub_local.EPUB_DIR / filename
+            if not path.exists():
+                continue
+            try:
+                parsed = epub_local.parse_epub_file(path)
+            except Exception:
+                logger.exception("Cannot re-parse %s — leaving chapters alone", filename)
+                continue
+            report = chapter_repair.rebuild_epub_chapters(
+                db, Chapter, Progress, novel, parsed, filename, epub_local.chapter_url)
+            if report:
+                remove_chapter_audio(set(report["removed_chapter_ids"]))
+                logger.warning(
+                    "Rebuilt EPUB '%s' from its table of contents: %d -> %d chapters "
+                    "(progress order %s -> %s)",
+                    report["title"], report["chapters_before"], report["chapters_after"],
+                    report["progress_was_order"], report["progress_now_order"])
+    finally:
+        db.close()
+
+
 def start():
     """Create folders and start the polling loop (called from app lifespan)."""
     global _task
     epub_local.EPUB_DIR.mkdir(exist_ok=True)
     epub_local.covers_dir().mkdir(exist_ok=True)
+    backfill_cover_versions()
+    rebuild_stale_epubs()
     _task = asyncio.create_task(_loop())
     logger.info("EPUB folder sync watching %s", epub_local.EPUB_DIR)
 
@@ -138,15 +197,23 @@ async def _register(db, filename: str):
     db.flush()
     if parsed.cover:
         epub_local.covers_dir().mkdir(exist_ok=True)
-        cover_path = epub_local.covers_dir() / f"{Path(filename).stem}.{parsed.cover_ext}"
+        stem = Path(filename).stem
+        # Clear any cover left behind by a previous book of the same name so a
+        # stale extension (cover.png then cover.jpg) can't win the glob.
+        for old in epub_local.covers_dir().glob(f"{epub_local.glob_escape(stem)}.*"):
+            old.unlink(missing_ok=True)
+        cover_path = epub_local.covers_dir() / f"{stem}.{parsed.cover_ext}"
         cover_path.write_bytes(parsed.cover)
-        novel.cover_url = f"/api/epubs/{novel.id}/cover"
+        # Version the URL by content: SQLite reuses novel ids, so the same
+        # path can otherwise serve a deleted book's cover from browser cache.
+        novel.cover_url = f"/api/epubs/{novel.id}/cover?v={epub_local.cover_version(stem)}"
     for ch in parsed.chapters:
         db.add(Chapter(
             novel_id=novel.id,
             rr_chapter_id=str(ch.index),
             title=ch.title,
             order=ch.index + 1,
+            chapter_number=ch.number,
             rr_url=epub_local.chapter_url(filename, ch.index),
             word_count=ch.word_count,
         ))
@@ -168,6 +235,7 @@ async def _resync(db, novel: Novel, filename: str):
         "rr_url": epub_local.chapter_url(filename, ch.index),
         "rr_chapter_id": str(ch.index),
         "order": ch.index + 1,
+        "chapter_number": ch.number,
         "published_at": None,
     } for ch in parsed.chapters]
     new_count = sync_chapter_list(db, novel, chapter_list)
