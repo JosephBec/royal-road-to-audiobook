@@ -18,17 +18,22 @@ def tts_env(tmp_path, monkeypatch):
 
     calls = {"n": 0}
 
-    def fake_blocking(pipeline, text, voice, speed):
+    def fake_blocking(engine, text, voice, speed):
         calls["n"] += 1
         import time
         time.sleep(0.2)  # hold long enough for a concurrent call to arrive
         return [np.zeros(2400, dtype=np.float32)]
 
-    async def fake_pipeline(voice="af_heart"):
-        return object()
+    class FakeEngine:
+        name = "fake"
+        sample_rate = 24000
+        supports_speed = True
+
+    async def fake_engine(engine_name=None):
+        return FakeEngine()
 
     monkeypatch.setattr(tts, "_synthesize_text_blocking", fake_blocking)
-    monkeypatch.setattr(tts, "get_pipeline", fake_pipeline)
+    monkeypatch.setattr(tts, "get_engine", fake_engine)
     return tts, calls
 
 

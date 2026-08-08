@@ -1,7 +1,10 @@
 """
-TTS Engine Wrapper
+TTS orchestration.
 
-Kokoro TTS synthesis with streaming support and temp file management.
+Synthesis itself is delegated to a pluggable engine (see engines/); everything
+here is engine-agnostic: temp file management, per-chapter dedup locks, segment
+streaming for Instant Play, HLS/AAC encoding and cache retention.
+
 Handles both Mode A (streaming) and Mode B (wait-for-file) playback.
 """
 
@@ -17,31 +20,30 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 import numpy as np
 import soundfile as sf
 
-# torch and kokoro are heavy ML deps (hundreds of MB) and are only needed for
-# actual synthesis. They're imported lazily inside get_device/get_pipeline so
-# that importing this module (e.g. to run the mock-based test suite in CI)
-# doesn't require them.
-if TYPE_CHECKING:
-    from kokoro import KPipeline
+import engines
 
 logger = logging.getLogger(__name__)
 
+# Both shipped engines are 24 kHz. Kept as a module constant because callers
+# (voice demos, export assembly) import it; use engine.sample_rate when the
+# engine is known.
 SAMPLE_RATE = 24000
 TEMP_DIR = Path("./temp_audio")
 TEMP_DIR.mkdir(exist_ok=True)
 
-# Thread pool for running blocking TTS on a background thread
+# Thread pool for running blocking TTS on a background thread. Single worker:
+# one GPU, and serializing keeps VRAM predictable.
 _executor = ThreadPoolExecutor(max_workers=1)
 
-# Track the TTS pipeline singleton
-_pipeline: Optional[KPipeline] = None
-_pipeline_lock = asyncio.Lock()
-_pipeline_device: Optional[str] = None
+# The engine currently loaded on the worker thread. Switching engines unloads
+# the previous one so two models never hold VRAM at once.
+_active_engine_name: Optional[str] = None
+_engine_lock = asyncio.Lock()
 
 # Per-chapter locks so concurrent callers (playback + prefetch worker) never
 # synthesize the same chapter twice — the second awaits and reuses the file.
@@ -60,27 +62,23 @@ def get_device() -> str:
     return "cpu"
 
 
-async def get_pipeline(voice: str = "af_heart") -> "KPipeline":
-    """Get or create the Kokoro pipeline singleton."""
-    from kokoro import KPipeline
-    global _pipeline, _pipeline_device
-    async with _pipeline_lock:
-        if _pipeline is None:
-            device = get_device()
-            _pipeline_device = device
-            logger.info("Initializing Kokoro pipeline (device=%s)", device)
-            # Initialize in thread pool since it downloads/loads model weights
-            loop = asyncio.get_event_loop()
-            _pipeline = await loop.run_in_executor(
-                _executor,
-                lambda: KPipeline(lang_code="a", device=device)
-            )
-            logger.info("Kokoro pipeline initialized.")
-        return _pipeline
+async def get_engine(engine_name: str | None = None):
+    """Resolve and load an engine, unloading the previous one if it changed."""
+    global _active_engine_name
+    engine = engines.get_engine(engine_name)
+    async with _engine_lock:
+        if _active_engine_name != engine.name:
+            if _active_engine_name is not None:
+                previous = engines.get_engine(_active_engine_name)
+                logger.info("Switching TTS engine %s -> %s", previous.name, engine.name)
+                await asyncio.get_event_loop().run_in_executor(_executor, previous.unload)
+            await asyncio.get_event_loop().run_in_executor(_executor, engine.load)
+            _active_engine_name = engine.name
+    return engine
 
 
 def _synthesize_text_blocking(
-    pipeline: KPipeline,
+    engine,
     text: str,
     voice: str,
     speed: float,
@@ -89,20 +87,15 @@ def _synthesize_text_blocking(
     Synthesize text to audio segments (blocking, runs in thread pool).
     Returns list of audio numpy arrays.
     """
-    segments = []
-    generator = pipeline(text, voice=voice, speed=speed, split_pattern=r'\n+')
-    for graphemes, phonemes, audio in generator:
-        if audio is not None and len(audio) > 0:
-            segments.append(audio)
-    return segments
+    return [seg for seg in engine.synthesize(text, voice, speed) if seg is not None and len(seg)]
 
 
-def _segments_to_wav_bytes(segments: list[np.ndarray]) -> bytes:
+def _segments_to_wav_bytes(segments: list[np.ndarray], sample_rate: int = SAMPLE_RATE) -> bytes:
     """Concatenate audio segments into a single WAV file in memory."""
     if not segments:
         return b""
 
-    silence = np.zeros(int(SAMPLE_RATE * 0.3), dtype=np.float32)
+    silence = np.zeros(int(sample_rate * 0.3), dtype=np.float32)
     parts = []
     for i, seg in enumerate(segments):
         parts.append(seg)
@@ -111,7 +104,7 @@ def _segments_to_wav_bytes(segments: list[np.ndarray]) -> bytes:
 
     audio = np.concatenate(parts)
     buf = io.BytesIO()
-    sf.write(buf, audio, SAMPLE_RATE, format="WAV")
+    sf.write(buf, audio, sample_rate, format="WAV")
     buf.seek(0)
     return buf.read()
 
@@ -196,6 +189,7 @@ async def synthesize_chapter_to_file(
     text: str,
     voice: str = "af_heart",
     speed: float = 1.0,
+    engine_name: str | None = None,
 ) -> Path:
     """
     Synthesize a full chapter and save to a temp WAV file.
@@ -217,21 +211,22 @@ async def synthesize_chapter_to_file(
                 logger.info("Chapter %d already synthesized: %s", chapter_id, output_path)
                 return output_path
 
-            logger.info("Synthesizing chapter %d to file (voice=%s, speed=%.1f)", chapter_id, voice, speed)
+            engine = await get_engine(engine_name)
+            logger.info("Synthesizing chapter %d to file (engine=%s, voice=%s, speed=%.1f)",
+                        chapter_id, engine.name, voice, speed)
             start = time.time()
 
-            pipeline = await get_pipeline(voice)
             loop = asyncio.get_event_loop()
             segments = await loop.run_in_executor(
                 _executor,
-                _synthesize_text_blocking, pipeline, text, voice, speed
+                _synthesize_text_blocking, engine, text, voice, speed
             )
 
-            wav_bytes = _segments_to_wav_bytes(segments)
+            wav_bytes = _segments_to_wav_bytes(segments, engine.sample_rate)
             output_path.write_bytes(wav_bytes)
 
             elapsed = time.time() - start
-            duration = sum(len(s) for s in segments) / SAMPLE_RATE
+            duration = sum(len(s) for s in segments) / engine.sample_rate
             logger.info(
                 "Chapter %d synthesized: %.1fs audio in %.1fs (%.1fx realtime)",
                 chapter_id, duration, elapsed, duration / elapsed if elapsed > 0 else 0
@@ -245,17 +240,23 @@ async def synthesize_chapter_to_file(
             _synth_locks.pop(chapter_id, None)
 
 
-async def synthesize_batch(text: str, voice: str, speed: float) -> list[np.ndarray]:
+async def synthesize_batch(
+    text: str, voice: str, speed: float, engine_name: str | None = None
+) -> list[np.ndarray]:
     """Synthesize one export batch on the shared TTS worker.
 
     Deliberately one small executor job: exports call this per ~600-word
     batch and yield between calls, keeping worst-case playback latency to
     a single batch. (A future parallel export lane replaces this seam.)
+
+    Engines that can't vary their own rate (engine.supports_speed False) render
+    at natural pace here; export_worker time-stretches the result instead.
     """
-    pipeline = await get_pipeline(voice)
+    engine = await get_engine(engine_name)
+    synth_speed = speed if engine.supports_speed else 1.0
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        _executor, _synthesize_text_blocking, pipeline, text, voice, speed
+        _executor, _synthesize_text_blocking, engine, text, voice, synth_speed
     )
 
 
@@ -308,13 +309,14 @@ def _encode_segment_aac(chapter_id: int, index: int) -> bool:
         return False
 
 
-def _save_segment_wav(chapter_id: int, index: int, audio: np.ndarray) -> float:
+def _save_segment_wav(chapter_id: int, index: int, audio: np.ndarray,
+                      sample_rate: int = SAMPLE_RATE) -> float:
     """Save a single segment as a WAV file. Returns duration in seconds."""
     path = _segment_path(chapter_id, index)
     buf = io.BytesIO()
-    sf.write(buf, audio, SAMPLE_RATE, format="WAV")
+    sf.write(buf, audio, sample_rate, format="WAV")
     path.write_bytes(buf.getvalue())
-    return len(audio) / SAMPLE_RATE
+    return len(audio) / sample_rate
 
 
 async def synthesize_chapter_streaming(
@@ -322,6 +324,7 @@ async def synthesize_chapter_streaming(
     text: str,
     voice: str = "af_heart",
     speed: float = 1.0,
+    engine_name: str | None = None,
 ):
     """
     Synthesize a chapter segment by segment for Instant Play.
@@ -342,18 +345,17 @@ async def synthesize_chapter_streaming(
         "total_duration": 0.0, "file_ready": False,
     }
 
-    pipeline = await get_pipeline(voice)
+    engine = await get_engine(engine_name)
     loop = asyncio.get_event_loop()
     all_segments: list[np.ndarray] = []
 
     def _produce_segments():
         seg_index = 0
         try:
-            generator = pipeline(text, voice=voice, speed=speed, split_pattern=r'\n+')
-            for graphemes, phonemes, audio in generator:
+            for audio in engine.synthesize(text, voice, speed):
                 if audio is not None and len(audio) > 0:
                     all_segments.append(audio)
-                    dur = _save_segment_wav(chapter_id, seg_index, audio)
+                    dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
                     _encode_segment_aac(chapter_id, seg_index)
                     st = _streaming_state.get(chapter_id)
                     if st is not None:
@@ -367,7 +369,7 @@ async def synthesize_chapter_streaming(
 
     # Save complete concatenated file
     if all_segments:
-        wav_bytes = _segments_to_wav_bytes(all_segments)
+        wav_bytes = _segments_to_wav_bytes(all_segments, engine.sample_rate)
         temp_path_for_chapter(chapter_id).write_bytes(wav_bytes)
 
     st = _streaming_state.get(chapter_id)

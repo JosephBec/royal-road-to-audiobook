@@ -145,7 +145,8 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
     novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
     settings = db.query(Settings).first()
-    voice = effective_settings(novel, settings)["voice"]
+    eff = effective_settings(novel, settings)
+    voice, engine_name = eff["voice"], eff["engine"]
 
     # Check if already synthesized
     existing_path = temp_path_for_chapter(chapter_id)
@@ -168,7 +169,7 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
     # Synthesize full file then serve (speed=1.0, playback speed is client-side)
     with interactive_synthesis():
-        path = await synthesize_chapter_to_file(chapter_id, text, voice, 1.0)
+        path = await synthesize_chapter_to_file(chapter_id, text, voice, 1.0, engine_name)
     return FileResponse(
         path=str(path),
         media_type="audio/wav",
@@ -201,7 +202,8 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
 
     novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
     settings = db.query(Settings).first()
-    voice = effective_settings(novel, settings)["voice"]
+    eff = effective_settings(novel, settings)
+    voice, engine_name = eff["voice"], eff["engine"]
     playback_mode = settings.playback_mode if settings else "full"
 
     # Gather all DB data we need BEFORE launching background tasks
@@ -238,7 +240,7 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
         """Queue the next chapters for render-ahead, then apply retention cleanup."""
         # Single prefetch worker owns render-ahead; it dedups against the
         # favorites sync so a chapter is never synthesized twice.
-        prefetch.enqueue(prefetch_targets, voice)
+        prefetch.enqueue(prefetch_targets, voice, engine_name)
         db2 = SessionLocal()
         try:
             forever, expiring = retention_policy(db2)
@@ -268,14 +270,14 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     if playback_mode == "instant":
         async def _run_streaming():
             with interactive_synthesis():
-                await synthesize_chapter_streaming(chapter_id, text, voice, 1.0)
+                await synthesize_chapter_streaming(chapter_id, text, voice, 1.0, engine_name)
             await _after_synthesis()
         asyncio.create_task(_run_streaming())
         return {"ready": False, "duration_seconds": None, "mode": "instant"}
     else:
         async def _run_full():
             with interactive_synthesis():
-                await synthesize_chapter_to_file(chapter_id, text, voice, 1.0)
+                await synthesize_chapter_to_file(chapter_id, text, voice, 1.0, engine_name)
             await _after_synthesis()
         asyncio.create_task(_run_full())
         return {"ready": False, "duration_seconds": None, "mode": "full"}

@@ -25,6 +25,7 @@ class AddNovelRequest(BaseModel):
 
 
 class NovelSettingsRequest(BaseModel):
+    engine: str | None = None
     voice: str | None = None
     speed: float | None = None
     auto_play: bool | None = None
@@ -67,6 +68,7 @@ def _novel_settings_payload(novel: Novel, db: Session) -> dict:
         "favorite": bool(novel.favorite),
         "sort_order": novel.sort_order,
         "settings": {
+            "engine": novel.engine,
             "voice": novel.voice,
             "speed": novel.speed,
             "auto_play": novel.auto_play,
@@ -223,19 +225,25 @@ async def update_novel_settings(
     if "favorite" in provided and req.favorite is None:
         raise HTTPException(status_code=400, detail="favorite must be true or false")
 
+    if "engine" in provided and req.engine is not None:
+        import engines
+        if req.engine not in engines.engine_names():
+            raise HTTPException(status_code=400, detail=f"Unknown TTS engine '{req.engine}'")
+
     voice_changed = "voice" in provided and req.voice != novel.voice
-    for field in ("voice", "speed", "auto_play", "chapter_sort", "favorite"):
+    engine_changed = "engine" in provided and req.engine != novel.engine
+    for field in ("engine", "voice", "speed", "auto_play", "chapter_sort", "favorite"):
         if field in provided:
             setattr(novel, field, getattr(req, field))
     db.commit()
 
-    if voice_changed:
-        # Cached audio was synthesized with the old voice — drop it so the
-        # new voice takes effect on next play instead of appearing to do nothing
+    if voice_changed or engine_changed:
+        # Cached audio was synthesized with the old engine/voice — drop it so the
+        # change takes effect on next play instead of appearing to do nothing
         remove_chapter_audio({ch.id for ch in novel.chapters})
 
     logger.info("Novel %d settings updated: %s", novel_id,
-                {f: getattr(novel, f) for f in ("voice", "speed", "auto_play", "chapter_sort")})
+                {f: getattr(novel, f) for f in ("engine", "voice", "speed", "auto_play", "chapter_sort")})
     return _novel_settings_payload(novel, db)
 
 

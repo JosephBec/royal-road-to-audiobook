@@ -126,7 +126,8 @@ async def _sync_novel(novel_id: int):
 
         # 2. Determine the next chapters from saved progress
         settings = db.query(Settings).first()
-        voice = effective_settings(novel, settings)["voice"]
+        eff = effective_settings(novel, settings)
+        voice, engine_name = eff["voice"], eff["engine"]
         current_order = 0
         prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
         if prog and prog.chapter_id:
@@ -146,4 +147,4 @@ async def _sync_novel(novel_id: int):
 
     # 3. Hand render-ahead to the single prefetch worker (dedups against
     #    playback-triggered prefetch so nothing is synthesized twice).
-    prefetch.enqueue(target_data, voice)
+    prefetch.enqueue(target_data, voice, engine_name)

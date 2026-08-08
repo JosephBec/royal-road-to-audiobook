@@ -176,22 +176,56 @@ async def library_sync_status():
     return {"running": library_sync.is_running()}
 
 
+@app.get("/api/engines")
+async def list_engines():
+    """Available TTS engines and their voices, for the model/voice pickers."""
+    import engines as engine_registry
+
+    out = []
+    for name, engine in engine_registry.discover_engines().items():
+        ok, reason = engine.available()
+        out.append({
+            "name": name,
+            "label": engine.label,
+            "available": ok,
+            "unavailable_reason": reason,
+            "supports_speed": engine.supports_speed,
+            "supports_custom_voices": any(v.custom for v in engine.voices()) or name == "chatterbox",
+            "default_voice": engine.default_voice(),
+            "voices": [
+                {"id": v.id, "label": v.label, "custom": v.custom}
+                for v in engine.voices()
+            ],
+        })
+    out.sort(key=lambda e: e["name"] != engine_registry.DEFAULT_ENGINE)
+    return {"engines": out, "default_engine": engine_registry.DEFAULT_ENGINE}
+
+
 @app.get("/api/voices")
-async def list_voices():
-    """List available voices from config.yaml."""
-    config_path = Path(__file__).parent / "config.yaml"
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        return {
-            "voices": config.get("voices", []),
-            "default_voice": config.get("default_voice", "af_heart"),
-            "default_speed": config.get("default_speed", 1.0),
-        }
+async def list_voices(engine: str | None = None):
+    """Voices for one engine (defaults to the configured one).
+
+    Kept at its original path and shape so existing callers keep working; the
+    voice list is now sourced from the engine rather than config.yaml directly.
+    """
+    import engines as engine_registry
+    from database import SessionLocal, Settings
+
+    if engine is None:
+        db = SessionLocal()
+        try:
+            row = db.query(Settings).first()
+            engine = (row.engine if row else None) or engine_registry.DEFAULT_ENGINE
+        finally:
+            db.close()
+
+    impl = engine_registry.get_engine(engine)
     return {
-        "voices": [{"id": "af_heart", "label": "Heart (Female, American)"}],
-        "default_voice": "af_heart",
+        "engine": impl.name,
+        "voices": [{"id": v.id, "label": v.label, "custom": v.custom} for v in impl.voices()],
+        "default_voice": impl.default_voice(),
         "default_speed": 1.0,
+        "supports_speed": impl.supports_speed,
     }
 
 
@@ -205,18 +239,18 @@ VOICE_DEMO_DIR = Path(__file__).parent / "voice_demos"
 
 
 @app.get("/api/voices/{voice_id}/demo")
-async def voice_demo(voice_id: str):
+async def voice_demo(voice_id: str, engine: str | None = None):
     """Serve a short demo clip for a voice; synthesized on first request, cached on disk.
 
     Runs at interactive priority — the user is actively waiting to hear it.
+    Voice ids are namespaced per engine (Kokoro's af_*/bm_*, Chatterbox's cb_*),
+    so demo filenames stay unique without an engine prefix — which also keeps
+    the clips already on disk valid.
     """
-    config_path = Path(__file__).parent / "config.yaml"
-    valid_ids = {"af_heart"}
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-        valid_ids = {v["id"] for v in config.get("voices", [])}
-    if voice_id not in valid_ids:
+    import engines as engine_registry
+
+    impl = engine_registry.get_engine(engine)
+    if impl.resolve_voice(voice_id) is None:
         raise HTTPException(status_code=404, detail="Unknown voice")
 
     demo_path = VOICE_DEMO_DIR / f"{voice_id}.wav"
@@ -225,11 +259,11 @@ async def voice_demo(voice_id: str):
         import soundfile as sf
         import tts
         with tts.interactive_synthesis():
-            segments = await tts.synthesize_batch(DEMO_TEXT, voice_id, 1.0)
+            segments = await tts.synthesize_batch(DEMO_TEXT, voice_id, 1.0, impl.name)
         if not segments:
             raise HTTPException(status_code=502, detail="Demo synthesis produced no audio")
         VOICE_DEMO_DIR.mkdir(exist_ok=True)
-        sf.write(str(demo_path), np.concatenate(segments), tts.SAMPLE_RATE, subtype="PCM_16")
+        sf.write(str(demo_path), np.concatenate(segments), impl.sample_rate, subtype="PCM_16")
     return FileResponse(str(demo_path), media_type="audio/wav", filename=f"{voice_id}.wav")
 
 

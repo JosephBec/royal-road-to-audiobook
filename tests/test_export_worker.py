@@ -31,7 +31,7 @@ def job_env(tmp_path, monkeypatch):
     monkeypatch.setattr(export_worker, "EXPORT_DIR", tmp_path / "jobs")
     monkeypatch.setattr(export_worker, "_export_may_proceed", lambda _db: True)
 
-    async def fake_batch(text, voice, speed):
+    async def fake_batch(text, voice, speed, engine_name=None):
         return [np.zeros(2400, dtype=np.float32)]
     monkeypatch.setattr(tts, "synthesize_batch", fake_batch)
 
@@ -84,7 +84,7 @@ def test_retry_skips_existing_chapter_wavs(job_env, monkeypatch):
     import tts
     calls = {"n": 0}
 
-    async def counting_batch(text, voice, speed):
+    async def counting_batch(text, voice, speed, engine_name=None):
         calls["n"] += 1
         import numpy as np
         return [np.zeros(2400, dtype=np.float32)]
@@ -127,7 +127,7 @@ def test_cancel_marks_job_canceled(job_env, monkeypatch):
     db, database, export_worker, job, assembled = job_env
     import tts
 
-    async def cancel_then_batch(text, voice, speed):
+    async def cancel_then_batch(text, voice, speed, engine_name=None):
         export_worker.request_cancel(job.id)
         import numpy as np
         return [np.zeros(2400, dtype=np.float32)]

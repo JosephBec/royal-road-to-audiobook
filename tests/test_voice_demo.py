@@ -11,7 +11,7 @@ def client(monkeypatch, tmp_path):
     import tts
     calls = {"n": 0}
 
-    async def fake_batch(text, voice, speed):
+    async def fake_batch(text, voice, speed, engine_name=None):
         calls["n"] += 1
         return [np.zeros(2400, dtype=np.float32)]
     monkeypatch.setattr(tts, "synthesize_batch", fake_batch)

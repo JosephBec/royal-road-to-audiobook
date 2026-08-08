@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 class SettingsResponse(BaseModel):
+    engine: str
     voice: str
     speed: float
     playback_mode: str
@@ -33,6 +34,7 @@ class SettingsResponse(BaseModel):
 
 
 class UpdateSettingsRequest(BaseModel):
+    engine: str | None = None
     voice: str | None = None
     speed: float | None = None
     playback_mode: str | None = None
@@ -61,9 +63,23 @@ async def update_settings(req: UpdateSettingsRequest, db: Session = Depends(get_
     if not settings:
         raise HTTPException(status_code=500, detail="Settings not initialized")
 
+    import engines
+
+    global_engine_changed = req.engine is not None and req.engine != settings.engine
+    if req.engine is not None:
+        if req.engine not in engines.engine_names():
+            raise HTTPException(status_code=400, detail=f"Unknown TTS engine '{req.engine}'")
+        ok, reason = engines.get_engine(req.engine).available()
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"Engine unavailable: {reason}")
+        settings.engine = req.engine
     global_voice_changed = req.voice is not None and req.voice != settings.voice
     if req.voice is not None:
         settings.voice = req.voice
+    # Switching engines strands the old voice id, so snap to something the new
+    # engine actually has unless this same request already picked one.
+    if global_engine_changed and req.voice is None:
+        settings.voice = engines.resolve_voice(settings.engine, settings.voice)
     if req.speed is not None:
         if not (0.5 <= req.speed <= 2.0):
             raise HTTPException(status_code=400, detail="Speed must be between 0.5 and 2.0")
@@ -94,14 +110,20 @@ async def update_settings(req: UpdateSettingsRequest, db: Session = Depends(get_
     db.commit()
     db.refresh(settings)
 
-    if global_voice_changed:
-        # Invalidate cached audio for novels that inherit the global voice
-        # (novels with their own voice override are unaffected)
-        inheriting = db.query(Novel).filter(Novel.voice.is_(None)).all()
+    if global_voice_changed or global_engine_changed:
+        # Invalidate cached audio for novels that inherit the changed setting
+        # (novels with their own override are unaffected). A new engine renders
+        # the same voice differently, so an engine switch invalidates too.
+        column = Novel.voice if global_voice_changed else Novel.engine
+        inheriting = db.query(Novel).filter(column.is_(None)).all()
+        if global_engine_changed and global_voice_changed:
+            inheriting = db.query(Novel).filter(
+                Novel.voice.is_(None) | Novel.engine.is_(None)).all()
         ids = {ch.id for novel in inheriting for ch in novel.chapters}
         if ids:
             remove_chapter_audio(ids)
 
-    logger.info("Settings updated: voice=%s, speed=%.1f, mode=%s, auto_play=%s",
-                settings.voice, settings.speed, settings.playback_mode, settings.auto_play)
+    logger.info("Settings updated: engine=%s, voice=%s, speed=%.1f, mode=%s, auto_play=%s",
+                settings.engine, settings.voice, settings.speed,
+                settings.playback_mode, settings.auto_play)
     return settings

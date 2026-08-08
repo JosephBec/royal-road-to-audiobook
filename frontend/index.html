@@ -154,9 +154,14 @@
             </div>
             <div id="settings-panel-playback" class="settings-panel">
             <div class="setting-row">
+                <label for="setting-engine">Model</label>
+                <select id="setting-engine"></select>
+            </div>
+            <div class="setting-row">
                 <label for="setting-voice">Voice</label>
                 <select id="setting-voice"></select>
             </div>
+            <div class="setting-row setting-hint" id="engine-hint"></div>
             <div class="setting-row">
                 <label for="setting-speed">Speed</label>
                 <div class="speed-control">
@@ -229,6 +234,10 @@
         <div class="modal-content">
             <h3>Novel Settings</h3>
             <p id="ns-novel-name"></p>
+            <div class="setting-row">
+                <label for="ns-engine">Model</label>
+                <select id="ns-engine"></select>
+            </div>
             <div class="setting-row">
                 <label for="ns-voice">Voice</label>
                 <select id="ns-voice"></select>

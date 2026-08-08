@@ -9,6 +9,8 @@ resumes by skipping finished chapter WAVs).
 
 import asyncio
 import logging
+import subprocess
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -204,23 +206,70 @@ async def _get_text(chapter_id: int) -> str:
     return text
 
 
-async def _synthesize_chapter_wav(job_id, chapter_id, title, voice, speed, wav_path: Path):
+def _atempo_filter(speed: float) -> str:
+    """ffmpeg atempo chain for `speed`. One filter only covers 0.5–2.0, so
+    anything outside that range is expressed as a product of in-range steps."""
+    factors = []
+    remaining = speed
+    while remaining > 2.0:
+        factors.append(2.0)
+        remaining /= 2.0
+    while remaining < 0.5:
+        factors.append(0.5)
+        remaining /= 0.5
+    factors.append(remaining)
+    return ",".join(f"atempo={f:g}" for f in factors)
+
+
+async def _time_stretch(wav_path: Path, speed: float):
+    """Resample a rendered WAV to `speed` in place, preserving pitch.
+
+    Used for engines with no speed parameter of their own (Chatterbox). Playback
+    never needs this — the browser's audio.playbackRate handles it — but an M4B
+    is a fixed artifact, so the rate has to be baked in.
+    """
+    stretched = wav_path.with_suffix(".stretched.wav")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(wav_path),
+        "-filter:a", _atempo_filter(speed),
+        "-c:a", "pcm_s16le",
+        str(stretched),
+    ]
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    await asyncio.to_thread(
+        subprocess.run, cmd, check=True, capture_output=True, timeout=600,
+        creationflags=creationflags,
+    )
+    stretched.replace(wav_path)
+
+
+async def _synthesize_chapter_wav(job_id, chapter_id, title, voice, speed, wav_path: Path,
+                                  engine_name: str | None = None):
     """Batch-synthesize one chapter to a PCM_16 WAV, yielding between batches."""
+    import engines as engine_registry
+
+    engine = engine_registry.get_engine(engine_name)
     text = await _get_text(chapter_id)
     text = f"{title}\n\n{text}"  # spoken chapter announcement, matches streaming
     segments: list[np.ndarray] = []
     for batch in textbatch.split_batches(text):
         await _wait_for_export_turn(job_id)
-        segments.extend(await tts.synthesize_batch(batch, voice, speed))
+        segments.extend(await tts.synthesize_batch(batch, voice, speed, engine_name))
     if not segments:
         raise RuntimeError(f"no audio produced for '{title}'")
-    silence = np.zeros(int(tts.SAMPLE_RATE * 0.3), dtype=np.float32)
+    silence = np.zeros(int(engine.sample_rate * 0.3), dtype=np.float32)
     parts = []
     for i, seg in enumerate(segments):
         parts.append(seg)
         if i < len(segments) - 1:
             parts.append(silence)
-    sf.write(str(wav_path), np.concatenate(parts), tts.SAMPLE_RATE, subtype="PCM_16")
+    sf.write(str(wav_path), np.concatenate(parts), engine.sample_rate, subtype="PCM_16")
+
+    # tts.synthesize_batch renders at natural pace for these engines; bake the
+    # requested rate in afterwards so the exported file matches the setting.
+    if not engine.supports_speed and abs(speed - 1.0) > 1e-3:
+        await _time_stretch(wav_path, speed)
 
 
 async def _download_cover(novel_id: int) -> tuple:
@@ -276,11 +325,11 @@ async def _run_job(job_id: int):
                     .order_by(Chapter.order).all())
         plan = [(c.id, c.order, c.title) for c in chapters]
         params = (job.novel_id, job.novel_title, job.author,
-                  job.start_order, job.end_order, job.voice, job.speed)
+                  job.start_order, job.end_order, job.voice, job.speed, job.engine)
     finally:
         db.close()
 
-    novel_id, novel_title, author, start_order, end_order, voice, speed = params
+    novel_id, novel_title, author, start_order, end_order, voice, speed, engine_name = params
     if not plan:
         _update_job(job_id, status="failed", error="no chapters in range",
                     finished_at=datetime.now(timezone.utc))
@@ -302,7 +351,7 @@ async def _run_job(job_id: int):
             wav_path = job_dir / f"chapter_{order:05d}.wav"
             if not wav_path.exists():  # retry-resume: skip finished chapters
                 _update_job(job_id, detail=f"synthesizing ch. {done + 1}/{len(plan)}: {title}")
-                await _synthesize_chapter_wav(job_id, ch_id, title, voice, speed, wav_path)
+                await _synthesize_chapter_wav(job_id, ch_id, title, voice, speed, wav_path, engine_name)
             done += 1
             _update_job(job_id, chapters_done=done)
 

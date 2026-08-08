@@ -933,6 +933,17 @@ a:hover { color: var(--accent-hover); }
     font-weight: 500;
 }
 
+/* Engine-specific note under the model picker; collapses when empty */
+.setting-hint {
+    display: block;
+    padding: 8px 0 0;
+    border-bottom: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+.setting-hint:empty { display: none; }
+
 .setting-row select {
     background: var(--bg-input);
     color: var(--text-primary);

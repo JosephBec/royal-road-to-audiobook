@@ -68,11 +68,15 @@ def is_busy() -> bool:
     return bool(_pending) or bool(_inflight) or (_queue is not None and not _queue.empty())
 
 
-def enqueue(targets: list[tuple[int, str, str]], voice: str):
+def enqueue(targets: list[tuple[int, str, str]], voice: str, engine: str | None = None):
     """Queue chapters to render ahead. `targets` are (chapter_id, url, title).
 
     Skips chapters already rendered on disk or already queued/in-flight, so
     repeated triggers for overlapping chapters do no duplicate work.
+
+    The engine is captured per item rather than read at render time: a queued
+    chapter should render with the engine that was in effect when it was
+    queued, not whatever the user has switched to by the time it drains.
     """
     queue = _ensure_queue()
     for chapter_id, url, title in targets:
@@ -81,7 +85,7 @@ def enqueue(targets: list[tuple[int, str, str]], voice: str):
         if tts.temp_path_for_chapter(chapter_id).exists():
             continue
         _pending.add(chapter_id)
-        queue.put_nowait((chapter_id, url, title, voice))
+        queue.put_nowait((chapter_id, url, title, voice, engine))
 
 
 async def _wait_for_interactive_idle():
@@ -117,8 +121,10 @@ async def _fetch_text(chapter_id: int, url: str) -> str | None:
         db.close()
 
 
-async def _process_one(item: tuple[int, str, str, str]):
-    chapter_id, url, title, voice = item
+async def _process_one(item: tuple):
+    # Tolerate the 4-tuple form so an item queued before an upgrade still drains.
+    chapter_id, url, title, voice = item[:4]
+    engine = item[4] if len(item) > 4 else None
     _inflight.add(chapter_id)
     try:
         if tts.temp_path_for_chapter(chapter_id).exists():

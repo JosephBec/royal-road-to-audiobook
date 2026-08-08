@@ -31,8 +31,9 @@ const state = {
     progressInterval: null,
     saveInterval: null,
     // Settings
-    settings: { voice: 'af_heart', speed: 1.0, playback_mode: 'full', auto_play: true, theme: 'dark', chapter_sort: 'asc' },
+    settings: { engine: 'kokoro', voice: 'af_heart', speed: 1.0, playback_mode: 'full', auto_play: true, theme: 'dark', chapter_sort: 'asc' },
     voices: [],
+    engines: [],
     // Instant Play state
     _instantActive: false,    // whether instant play loop is running
     _instantSwapped: false,   // whether we've swapped to full file
@@ -1284,22 +1285,66 @@ async function loadSettings() {
 }
 
 async function loadVoices() {
+    // Engines carry their own voice lists; state.voices always holds the ones
+    // belonging to the currently selected engine so every existing consumer
+    // (settings, per-novel, export, demos) keeps working unchanged.
     try {
-        const data = await api('GET', '/api/voices');
-        state.voices = data.voices || [];
+        const data = await api('GET', '/api/engines');
+        state.engines = data.engines || [];
+        state.voices = voicesForEngine(state.settings.engine);
     } catch (e) {
-        console.error('Failed to load voices:', e);
+        console.error('Failed to load engines:', e);
     }
+}
+
+function engineByName(name) {
+    return (state.engines || []).find(e => e.name === name)
+        || (state.engines || [])[0] || null;
+}
+
+function voicesForEngine(name) {
+    return engineByName(name)?.voices || [];
+}
+
+function engineOptionsHtml(selected, { inheritLabel = null } = {}) {
+    const opts = (state.engines || []).map(e => {
+        const label = e.available ? e.label : `${e.label} — ${e.unavailable_reason}`;
+        return `<option value="${escapeHtml(e.name)}" ${e.name === selected ? 'selected' : ''} ${e.available ? '' : 'disabled'}>${escapeHtml(label)}</option>`;
+    });
+    if (inheritLabel) {
+        opts.unshift(`<option value="" ${!selected ? 'selected' : ''}>${escapeHtml(inheritLabel)}</option>`);
+    }
+    return opts.join('');
+}
+
+function renderEngineHint() {
+    const hint = document.getElementById('engine-hint');
+    if (!hint) return;
+    const eng = engineByName(state.settings.engine);
+    if (!eng) { hint.textContent = ''; return; }
+    const bits = [];
+    if (eng.supports_custom_voices) {
+        bits.push('Drop a 5s+ WAV in the voices/ folder to add a custom voice.');
+    }
+    if (!eng.supports_speed) {
+        bits.push('Playback speed still works; exports are time-stretched.');
+    }
+    hint.textContent = bits.join(' ');
 }
 
 function openSettings() {
     document.getElementById('modal-settings').style.display = 'flex';
 
-    // Populate voice dropdown
+    // Populate model dropdown
+    document.getElementById('setting-engine').innerHTML =
+        engineOptionsHtml(state.settings.engine);
+
+    // Populate voice dropdown for the selected model
     const voiceSelect = document.getElementById('setting-voice');
     voiceSelect.innerHTML = state.voices.map(v =>
         `<option value="${escapeHtml(v.id)}" ${v.id === state.settings.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
+    renderEngineHint();
 
     // Speed
     document.getElementById('speed-value').textContent = `${state.settings.speed.toFixed(2)}x`;
@@ -1534,10 +1579,19 @@ function openNovelSettings() {
 
     document.getElementById('ns-novel-name').textContent = novel.title;
 
-    const globalVoiceLabel = state.voices.find(v => v.id === state.settings.voice)?.label || state.settings.voice;
+    const globalEngineLabel = engineByName(state.settings.engine)?.label || state.settings.engine;
+    document.getElementById('ns-engine').innerHTML =
+        engineOptionsHtml(ov.engine || '', { inheritLabel: `Default (${globalEngineLabel})` });
+
+    // Voices belong to whichever engine is in effect for THIS novel, which may
+    // be its own override rather than the global one.
+    const novelEngine = ov.engine || state.settings.engine;
+    const novelVoices = voicesForEngine(novelEngine);
+    const inheritedVoice = novel.effective_settings?.voice ?? state.settings.voice;
+    const globalVoiceLabel = novelVoices.find(v => v.id === inheritedVoice)?.label || inheritedVoice;
     document.getElementById('ns-voice').innerHTML =
         `<option value="">Default (${escapeHtml(globalVoiceLabel)})</option>` +
-        state.voices.map(v =>
+        novelVoices.map(v =>
             `<option value="${escapeHtml(v.id)}" ${v.id === ov.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
         ).join('');
 
@@ -1625,7 +1679,7 @@ function openExportModal() {
     }).catch(e => showToast('Failed to load chapters: ' + e.message, 5000));
     const eff = novel.effective_settings || {};
     const voiceSel = document.getElementById('export-voice');
-    voiceSel.innerHTML = state.voices.map(v =>
+    voiceSel.innerHTML = voicesForEngine(eff.engine || state.settings.engine).map(v =>
         `<option value="${escapeHtml(v.id)}" ${v.id === eff.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
     ).join('');
     // Same +/− stepper as everywhere else, defaulting to the novel's
@@ -1831,6 +1885,16 @@ function setupEventListeners() {
     document.getElementById('modal-novel-settings').addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeNovelSettings();
     });
+    document.getElementById('ns-engine').addEventListener('change', async (e) => {
+        // Clear any voice override at the same time: a voice id from the old
+        // engine is meaningless to the new one, and leaving it set would just
+        // fall back silently on the server.
+        const next = e.target.value || null;
+        if (state.currentNovel?.settings?.voice) {
+            await updateNovelSetting('voice', null);
+        }
+        await updateNovelSetting('engine', next);
+    });
     document.getElementById('ns-voice').addEventListener('change', (e) => {
         updateNovelSetting('voice', e.target.value || null);
     });
@@ -1855,6 +1919,18 @@ function setupEventListeners() {
     // Settings
     document.getElementById('btn-settings').addEventListener('click', openSettings);
     document.getElementById('btn-settings-close').addEventListener('click', closeSettings);
+
+    document.getElementById('setting-engine').addEventListener('change', async (e) => {
+        // The server snaps the voice to one the new engine has; re-read it
+        // rather than guessing, then repopulate the voice list to match.
+        await updateSetting('engine', e.target.value);
+        state.voices = voicesForEngine(state.settings.engine);
+        document.getElementById('setting-voice').innerHTML = state.voices.map(v =>
+            `<option value="${escapeHtml(v.id)}" ${v.id === state.settings.voice ? 'selected' : ''}>${escapeHtml(v.label)}</option>`
+        ).join('');
+        renderEngineHint();
+        showToast(`Model: ${engineByName(state.settings.engine)?.label || e.target.value}`);
+    });
 
     document.getElementById('setting-voice').addEventListener('change', (e) => {
         updateSetting('voice', e.target.value);

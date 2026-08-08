@@ -42,6 +42,7 @@ class Novel(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Per-novel setting overrides; NULL = use global Settings default
+    engine = Column(String, nullable=True)
     voice = Column(String, nullable=True)
     speed = Column(Float, nullable=True)
     auto_play = Column(Boolean, nullable=True)
@@ -93,6 +94,7 @@ class Settings(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    engine = Column(String, default="kokoro")  # see engines/ registry
     voice = Column(String, default="af_heart")
     speed = Column(Float, default=1.0)
     playback_mode = Column(String, default="full")  # "full" or "instant"
@@ -114,6 +116,7 @@ class ExportJob(Base):
     author = Column(Text, default="Unknown")
     start_order = Column(Integer, nullable=False)
     end_order = Column(Integer, nullable=False)
+    engine = Column(String, nullable=True)  # snapshot: job renders with the engine chosen at queue time
     voice = Column(String, nullable=False)
     speed = Column(Float, nullable=False)
     status = Column(String, nullable=False, default="queued")
@@ -131,6 +134,7 @@ def _migrate_schema():
     inspector = sa_inspect(engine)
     table_columns = {
         "novels": {
+            "engine": "TEXT",
             "voice": "TEXT",
             "speed": "FLOAT",
             "auto_play": "BOOLEAN",
@@ -141,7 +145,11 @@ def _migrate_schema():
         "chapters": {
             "text": "TEXT",
         },
+        "export_jobs": {
+            "engine": "TEXT",
+        },
         "settings": {
+            "engine": "TEXT NOT NULL DEFAULT 'kokoro'",
             "audiobook_dir": "TEXT NOT NULL DEFAULT 'E:\\Plex\\Audiobooks\\Audiobooks'",
             "plex_url": "TEXT NOT NULL DEFAULT ''",
             "plex_token": "TEXT NOT NULL DEFAULT ''",
@@ -157,9 +165,20 @@ def _migrate_schema():
 
 
 def effective_settings(novel: "Novel", settings: "Settings") -> dict:
-    """Resolve per-novel overrides against global settings (None = inherit)."""
+    """Resolve per-novel overrides against global settings (None = inherit).
+
+    The voice is additionally coerced to one the resolved engine actually
+    provides — switching engines otherwise leaves a voice id the new engine
+    has never heard of.
+    """
+    import engines
+
+    engine = novel.engine if novel.engine is not None else (
+        (getattr(settings, "engine", None) or "kokoro") if settings else "kokoro")
+    voice = novel.voice if novel.voice is not None else (settings.voice if settings else "af_heart")
     return {
-        "voice": novel.voice if novel.voice is not None else (settings.voice if settings else "af_heart"),
+        "engine": engine,
+        "voice": engines.resolve_voice(engine, voice),
         "speed": novel.speed if novel.speed is not None else (settings.speed if settings else 1.0),
         "auto_play": novel.auto_play if novel.auto_play is not None else (settings.auto_play if settings else True),
         "chapter_sort": novel.chapter_sort if novel.chapter_sort is not None else (settings.chapter_sort if settings else "asc"),
@@ -206,12 +225,20 @@ def init_db():
     try:
         settings = db.query(Settings).first()
         if not settings:
-            db.add(Settings(voice="af_heart", speed=1.0, playback_mode="full", auto_play=True, theme="dark", chapter_sort="asc"))
+            db.add(Settings(engine="kokoro", voice="af_heart", speed=1.0, playback_mode="full",
+                            auto_play=True, theme="dark", chapter_sort="asc"))
             db.commit()
         else:
+            dirty = False
             # Migrate old playback_mode values
             if settings.playback_mode not in ("full", "instant"):
                 settings.playback_mode = "full"
+                dirty = True
+            # Rows created before the engine column existed
+            if not settings.engine:
+                settings.engine = "kokoro"
+                dirty = True
+            if dirty:
                 db.commit()
     finally:
         db.close()

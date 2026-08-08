@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 import export_worker
 import plex
-from database import get_db, ExportJob, Novel, Chapter, Settings
+from database import get_db, ExportJob, Novel, Chapter, Settings, effective_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["exports"])
@@ -76,10 +76,16 @@ async def create_export(novel_id: int, req: ExportRequest, db: Session = Depends
     if count == 0:
         raise HTTPException(status_code=400, detail="No chapters in that range")
 
+    # Snapshot the engine in effect for this novel now — the job must render
+    # with what was chosen at queue time, not whatever is selected days later
+    # when a long export finally reaches the front of the queue.
+    engine_name = effective_settings(novel, settings)["engine"]
+
     dupe = (db.query(ExportJob)
             .filter(ExportJob.novel_id == novel_id,
                     ExportJob.start_order == req.start_order,
                     ExportJob.end_order == req.end_order,
+                    ExportJob.engine == engine_name,
                     ExportJob.voice == req.voice,
                     ExportJob.speed == req.speed,
                     ExportJob.status.in_(("queued", "running"))).first())
@@ -89,7 +95,7 @@ async def create_export(novel_id: int, req: ExportRequest, db: Session = Depends
     job = ExportJob(novel_id=novel_id, novel_title=novel.title,
                     author=novel.author or "Unknown",
                     start_order=req.start_order, end_order=req.end_order,
-                    voice=req.voice, speed=req.speed,
+                    engine=engine_name, voice=req.voice, speed=req.speed,
                     status="queued", chapters_total=count,
                     detail="queued")
     db.add(job)

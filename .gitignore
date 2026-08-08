@@ -39,3 +39,7 @@ export_jobs/
 voice_demos/
 
 EPUBs/
+
+# Custom voice reference clips (README is tracked)
+voices/*
+!voices/README.md
