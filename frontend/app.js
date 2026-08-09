@@ -1292,8 +1292,20 @@ async function loadVoices() {
         const data = await api('GET', '/api/engines');
         state.engines = data.engines || [];
         state.voices = voicesForEngine(state.settings.engine);
+        return;
     } catch (e) {
-        console.error('Failed to load engines:', e);
+        console.warn('No /api/engines — falling back to the single-engine voice list:', e);
+    }
+    // The server process can be older than the assets it serves: index.html and
+    // app.js are read from disk per request, but the Python is whatever was
+    // loaded at startup. Without this fallback that window leaves the voice
+    // pickers completely empty rather than merely missing the model switcher.
+    try {
+        const data = await api('GET', '/api/voices');
+        state.voices = data.voices || [];
+        state.engines = [];
+    } catch (e) {
+        console.error('Failed to load voices:', e);
     }
 }
 
@@ -1335,9 +1347,12 @@ function renderEngineHint() {
 function openSettings() {
     document.getElementById('modal-settings').style.display = 'flex';
 
-    // Populate model dropdown
-    document.getElementById('setting-engine').innerHTML =
-        engineOptionsHtml(state.settings.engine);
+    // Populate model dropdown. With no engines reported (a server older than
+    // these assets) hide the row rather than showing an empty, dead select.
+    const engineSelect = document.getElementById('setting-engine');
+    engineSelect.closest('.setting-row').style.display =
+        state.engines.length ? '' : 'none';
+    engineSelect.innerHTML = engineOptionsHtml(state.settings.engine);
 
     // Populate voice dropdown for the selected model
     const voiceSelect = document.getElementById('setting-voice');
@@ -1580,7 +1595,9 @@ function openNovelSettings() {
     document.getElementById('ns-novel-name').textContent = novel.title;
 
     const globalEngineLabel = engineByName(state.settings.engine)?.label || state.settings.engine;
-    document.getElementById('ns-engine').innerHTML =
+    const nsEngine = document.getElementById('ns-engine');
+    nsEngine.closest('.setting-row').style.display = state.engines.length ? '' : 'none';
+    nsEngine.innerHTML =
         engineOptionsHtml(ov.engine || '', { inheritLabel: `Default (${globalEngineLabel})` });
 
     // Voices belong to whichever engine is in effect for THIS novel, which may

@@ -43,3 +43,6 @@ EPUBs/
 # Custom voice reference clips (README is tracked)
 voices/*
 !voices/README.md
+
+# stderr log from a manually-restarted server (tray merges into server.log)
+server.err.log
