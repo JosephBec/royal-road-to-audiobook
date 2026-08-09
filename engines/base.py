@@ -113,6 +113,17 @@ class TTSEngine:
         """Load model weights. Blocking; called once on the TTS worker thread."""
         raise NotImplementedError
 
+    def plan_chunks(self, text: str) -> list[str]:
+        """Split text into independently-synthesizable pieces.
+
+        Callers submit these to the worker one at a time so a long chapter
+        can't monopolise it — anything interactive (a voice demo, the chapter
+        you just pressed play on) slots in at the next boundary instead of
+        waiting out the whole render. Engines fast enough not to care return
+        the text unsplit.
+        """
+        return [text]
+
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator["np.ndarray"]:
         """Yield float32 mono audio segments at self.sample_rate.
 

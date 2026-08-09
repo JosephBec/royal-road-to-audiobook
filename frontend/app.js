@@ -1473,7 +1473,10 @@ async function playVoiceDemo(btn) {
     if (wasPlaying) return; // toggled off
 
     btn.textContent = '…'; // generating/loading
-    const audio = new Audio(`/api/voices/${encodeURIComponent(btn.dataset.voice)}/demo`);
+    // Voice ids are engine-scoped; without the engine the server resolves
+    // against the default one and 404s on every Chatterbox voice.
+    const audio = new Audio(`/api/voices/${encodeURIComponent(btn.dataset.voice)}/demo`
+        + `?engine=${encodeURIComponent(state.settings.engine)}`);
     demoAudio = audio;
     audio.addEventListener('playing', () => {
         if (demoAudio === audio) btn.textContent = '■';

@@ -139,6 +139,7 @@ def _all_temp_audio_files():
     """All temp audio artifacts: full WAVs, segment WAVs, HLS AAC segments."""
     yield from TEMP_DIR.glob("chapter_*.wav")
     yield from TEMP_DIR.glob("chapter_*.aac")
+    yield from TEMP_DIR.glob("chapter_*_segments.json")
 
 
 # How long non-favorite prefetched audio survives (binge cache): 2 days
@@ -295,6 +296,56 @@ def _aac_segment_path(chapter_id: int, index: int) -> Path:
     return TEMP_DIR / f"chapter_{chapter_id}_seg_{index}.aac"
 
 
+def _segment_index_path(chapter_id: int) -> Path:
+    """Sidecar recording each AAC segment's real, measured duration."""
+    return TEMP_DIR / f"chapter_{chapter_id}_segments.json"
+
+
+def record_segment_duration(chapter_id: int, index: int, duration: float):
+    """Append a measured segment duration to the chapter's sidecar.
+
+    The playlist used to recompute this as `wav duration + whatever gap the
+    voice is set to now`, which breaks as soon as the pause changes: audio
+    already on disk was encoded with the old value. Over a few hundred segments
+    a 0.4s discrepancy compounds into minutes and resume lands in the wrong
+    place. Record the value used at encode time instead.
+
+    Note this is computed, not probed: ADTS AAC carries no duration header, so
+    ffprobe only estimates it from bitrate — unreliable to a few hundred ms.
+    The WAV length plus the pad we passed to ffmpeg is exact.
+    """
+    import json
+    path = _segment_index_path(chapter_id)
+    try:
+        durations = json.loads(path.read_text()) if path.exists() else []
+        if not isinstance(durations, list):
+            durations = []
+    except Exception:
+        durations = []
+    while len(durations) <= index:
+        durations.append(None)
+    durations[index] = round(duration, 4)
+    try:
+        path.write_text(json.dumps(durations))
+    except OSError:
+        pass
+
+
+def segment_durations(chapter_id: int) -> list[float] | None:
+    """Measured segment durations, or None if this chapter predates the sidecar."""
+    import json
+    path = _segment_index_path(chapter_id)
+    if not path.exists():
+        return None
+    try:
+        durations = json.loads(path.read_text())
+    except Exception:
+        return None
+    if not isinstance(durations, list) or any(d is None for d in durations):
+        return None
+    return [float(d) for d in durations]
+
+
 def _encode_segment_aac(chapter_id: int, index: int,
                         gap_seconds: float = SEGMENT_GAP_SECONDS) -> bool:
     """
@@ -319,10 +370,16 @@ def _encode_segment_aac(chapter_id: int, index: int,
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=60,
                        creationflags=creationflags)
-        return True
     except Exception as e:
         logger.warning("AAC encode failed for chapter %d seg %d: %s", chapter_id, index, e)
         return False
+    try:
+        record_segment_duration(chapter_id, index,
+                                sf.info(str(wav)).duration + gap_seconds)
+    except Exception:
+        logger.warning("Could not record duration for chapter %d seg %d",
+                       chapter_id, index)
+    return True
 
 
 def _save_segment_wav(chapter_id: int, index: int, audio: np.ndarray,
@@ -366,23 +423,30 @@ async def synthesize_chapter_streaming(
     loop = asyncio.get_event_loop()
     all_segments: list[np.ndarray] = []
 
-    def _produce_segments():
-        seg_index = 0
-        try:
-            for audio in engine.synthesize(text, voice, speed):
-                if audio is not None and len(audio) > 0:
-                    all_segments.append(audio)
-                    dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
-                    _encode_segment_aac(chapter_id, seg_index, gap)
-                    st = _streaming_state.get(chapter_id)
-                    if st is not None:
-                        st["segments"].append(dur)
-                        st["total_duration"] += dur
-                    seg_index += 1
-        except Exception as e:
-            logger.error("Streaming synthesis error for chapter %d: %s", chapter_id, e)
+    def _render_chunk(chunk_text: str) -> list[np.ndarray]:
+        return [a for a in engine.synthesize(chunk_text, voice, speed)
+                if a is not None and len(a) > 0]
 
-    await loop.run_in_executor(_executor, _produce_segments)
+    # One executor submission per chunk rather than one for the whole chapter.
+    # The pool has a single worker and runs FIFO, so submitting the next chunk
+    # only after the previous finishes leaves a gap where interactive work — a
+    # voice demo, or the chapter the user just pressed play on — can take the
+    # worker. Rendering the chapter as one job made those wait out the entire
+    # render, which on Chatterbox is many minutes.
+    seg_index = 0
+    try:
+        for chunk_text in engine.plan_chunks(text):
+            for audio in await loop.run_in_executor(_executor, _render_chunk, chunk_text):
+                all_segments.append(audio)
+                dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
+                _encode_segment_aac(chapter_id, seg_index, gap)
+                st = _streaming_state.get(chapter_id)
+                if st is not None:
+                    st["segments"].append(dur)
+                    st["total_duration"] += dur
+                seg_index += 1
+    except Exception as e:
+        logger.error("Streaming synthesis error for chapter %d: %s", chapter_id, e)
 
     # Save complete concatenated file
     if all_segments:

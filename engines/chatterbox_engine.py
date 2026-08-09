@@ -230,6 +230,11 @@ class ChatterboxEngine(TTSEngine):
         self._model.conds = conds
         self._active_voice = voice_id
 
+    def plan_chunks(self, text: str) -> list[str]:
+        # Each sentence is already an independent generate() call, so these are
+        # natural yield points for the shared worker.
+        return _split_chunks(text)
+
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator["np.ndarray"]:
         self.load()
         self._apply_voice(voice)

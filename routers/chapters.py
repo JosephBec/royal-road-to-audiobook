@@ -27,6 +27,7 @@ from tts import (
     cleanup_temp_files, interactive_synthesis,
     temp_path_for_chapter, _segment_path,
     _aac_segment_path, SEGMENT_GAP_SECONDS, segment_gap_for,
+    segment_durations as recorded_segment_durations,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,22 +361,27 @@ async def get_hls_playlist(chapter_id: int, db: Session = Depends(get_db)):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
-    # Must match the pad ffmpeg baked into each AAC segment, which is the
-    # engine+voice gap — not the module default — or the playlist timeline
-    # drifts from the audio and seeking lands in the wrong place.
-    novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
-    settings = db.query(Settings).first()
-    eff = effective_settings(novel, settings)
-    gap = segment_gap_for(eff["engine"], eff["voice"])
+    # Prefer the durations measured when each AAC was encoded. Deriving them
+    # as "wav length + assumed gap" was wrong twice over — the encoder shifts
+    # length by a couple hundred ms either way, and the assumed gap may differ
+    # from what was actually baked in. Over hundreds of segments that compounds
+    # into minutes and resume lands in the wrong place.
+    measured = recorded_segment_durations(chapter_id)
 
     durations = []
     idx = 0
     while _aac_segment_path(chapter_id, idx).exists():
-        wav = _segment_path(chapter_id, idx)
-        try:
-            durations.append(sf.info(str(wav)).duration + gap)
-        except Exception:
-            durations.append(gap)
+        if measured is not None and idx < len(measured):
+            durations.append(measured[idx])
+        else:
+            # Audio cached before durations were recorded: fall back to the
+            # historical assumption rather than the current voice's gap, which
+            # this file was not encoded with.
+            wav = _segment_path(chapter_id, idx)
+            try:
+                durations.append(sf.info(str(wav)).duration + SEGMENT_GAP_SECONDS)
+            except Exception:
+                durations.append(SEGMENT_GAP_SECONDS)
         idx += 1
 
     if idx == 0:
