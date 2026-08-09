@@ -272,10 +272,23 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     # Announce the chapter title at the start of the audio
     text = f"{chapter.title}\n\n{text}"
 
+    # Per-character voices, if this novel is opted in and has a usable script.
+    # None means render single-voice exactly as before.
+    chunk_voices = None
+    try:
+        import engines as engine_registry
+        import voice_script
+        chunk_voices = voice_script.chunk_voices_for_chapter(
+            db, chapter, engine_registry.get_engine(engine_name), voice)
+    except Exception:
+        logger.exception("Voice script lookup failed for chapter %d — "
+                         "falling back to single voice", chapter_id)
+
     if playback_mode == "instant":
         async def _run_streaming():
             with interactive_synthesis():
-                await synthesize_chapter_streaming(chapter_id, text, voice, 1.0, engine_name)
+                await synthesize_chapter_streaming(
+                    chapter_id, text, voice, 1.0, engine_name, chunk_voices)
             await _after_synthesis()
         asyncio.create_task(_run_streaming())
         return {"ready": False, "duration_seconds": None, "mode": "instant"}

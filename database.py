@@ -41,6 +41,11 @@ class Novel(Base):
     last_refreshed = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Render dialogue in per-character voices using this novel's voice scripts.
+    # Off by default: single-voice playback stays exactly as it is until you
+    # opt a novel in.
+    multi_voice = Column(Boolean, nullable=False, default=False)
+
     # Per-novel setting overrides; NULL = use global Settings default
     engine = Column(String, nullable=True)
     voice = Column(String, nullable=True)
@@ -93,6 +98,55 @@ class Progress(Base):
     chapter = relationship("Chapter")
 
 
+class Character(Base):
+    """A speaking character in one novel, optionally cast to a voice.
+
+    Scoped per novel rather than globally: two books can have a Gareth without
+    them being the same person. Two characters sharing a name *within* one book
+    is rare enough that it is deliberately not modelled — if it ever bites, the
+    fix is an alias, not a schema change.
+    """
+    __tablename__ = "characters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False)
+    name = Column(Text, nullable=False)
+    # Other names the text uses for them ("the captain", a surname, a title).
+    aliases = Column(Text, nullable=True)          # JSON list
+    description = Column(Text, nullable=True)      # for casting a voice by feel
+    voice = Column(String, nullable=True)          # NULL = fall back to narrator
+    engine = Column(String, nullable=True)         # engine that voice belongs to
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    novel = relationship("Novel")
+
+    __table_args__ = (
+        UniqueConstraint("novel_id", "name", name="uq_novel_character_name"),
+    )
+
+
+class ChapterScript(Base):
+    """Per-chapter map of which span of text is spoken by whom.
+
+    `spans` is JSON rather than rows: it is read and written whole, always in
+    order, and never queried by field. One row per chapter keeps re-tagging a
+    single atomic write.
+
+    `text_hash` pins the script to the exact chapter text it was built from —
+    a re-scrape that changes wording invalidates the span indices, and a stale
+    script would assign lines to the wrong speaker.
+    """
+    __tablename__ = "chapter_scripts"
+
+    chapter_id = Column(Integer, ForeignKey("chapters.id"), primary_key=True)
+    text_hash = Column(String, nullable=False)
+    spans = Column(Text, nullable=False)           # JSON list
+    source = Column(String, nullable=False, default="rule")  # rule | external
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    chapter = relationship("Chapter")
+
+
 class Settings(Base):
     __tablename__ = "settings"
 
@@ -137,6 +191,7 @@ def _migrate_schema():
     inspector = sa_inspect(engine)
     table_columns = {
         "novels": {
+            "multi_voice": "BOOLEAN NOT NULL DEFAULT 0",
             "engine": "TEXT",
             "voice": "TEXT",
             "speed": "FLOAT",

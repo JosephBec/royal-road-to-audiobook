@@ -398,11 +398,18 @@ async def synthesize_chapter_streaming(
     voice: str = "af_heart",
     speed: float = 1.0,
     engine_name: str | None = None,
+    chunk_voices: list[str] | None = None,
 ):
     """
     Synthesize a chapter segment by segment for Instant Play.
     Each segment is saved as its own WAV file. State is tracked in _streaming_state.
     When complete, also saves the full concatenated file.
+
+    `chunk_voices` optionally gives a voice per chunk, letting a chapter render
+    dialogue in per-character voices (see voice_script). It must line up with
+    engine.plan_chunks(text); anything missing falls back to `voice`. Cloning
+    engines cache each voice's conditionals, so switching between them per
+    sentence costs a dict lookup after the first use.
     """
     # Check if already fully synthesized
     if temp_path_for_chapter(chapter_id).exists():
@@ -423,8 +430,8 @@ async def synthesize_chapter_streaming(
     loop = asyncio.get_event_loop()
     all_segments: list[np.ndarray] = []
 
-    def _render_chunk(chunk_text: str) -> list[np.ndarray]:
-        return [a for a in engine.synthesize(chunk_text, voice, speed)
+    def _render_chunk(chunk_text: str, chunk_voice: str) -> list[np.ndarray]:
+        return [a for a in engine.synthesize(chunk_text, chunk_voice, speed)
                 if a is not None and len(a) > 0]
 
     # One executor submission per chunk rather than one for the whole chapter.
@@ -435,8 +442,12 @@ async def synthesize_chapter_streaming(
     # render, which on Chatterbox is many minutes.
     seg_index = 0
     try:
-        for chunk_text in engine.plan_chunks(text):
-            for audio in await loop.run_in_executor(_executor, _render_chunk, chunk_text):
+        for chunk_number, chunk_text in enumerate(engine.plan_chunks(text)):
+            chunk_voice = voice
+            if chunk_voices and chunk_number < len(chunk_voices):
+                chunk_voice = chunk_voices[chunk_number] or voice
+            for audio in await loop.run_in_executor(
+                    _executor, _render_chunk, chunk_text, chunk_voice):
                 all_segments.append(audio)
                 dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
                 _encode_segment_aac(chapter_id, seg_index, gap)
