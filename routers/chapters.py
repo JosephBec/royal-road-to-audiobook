@@ -26,7 +26,7 @@ from tts import (
     get_chapter_status, get_streaming_state,
     cleanup_temp_files, interactive_synthesis,
     temp_path_for_chapter, _segment_path,
-    _aac_segment_path, SEGMENT_GAP_SECONDS,
+    _aac_segment_path, SEGMENT_GAP_SECONDS, segment_gap_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,14 +360,22 @@ async def get_hls_playlist(chapter_id: int, db: Session = Depends(get_db)):
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
+    # Must match the pad ffmpeg baked into each AAC segment, which is the
+    # engine+voice gap — not the module default — or the playlist timeline
+    # drifts from the audio and seeking lands in the wrong place.
+    novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
+    settings = db.query(Settings).first()
+    eff = effective_settings(novel, settings)
+    gap = segment_gap_for(eff["engine"], eff["voice"])
+
     durations = []
     idx = 0
     while _aac_segment_path(chapter_id, idx).exists():
         wav = _segment_path(chapter_id, idx)
         try:
-            durations.append(sf.info(str(wav)).duration + SEGMENT_GAP_SECONDS)
+            durations.append(sf.info(str(wav)).duration + gap)
         except Exception:
-            durations.append(SEGMENT_GAP_SECONDS)
+            durations.append(gap)
         idx += 1
 
     if idx == 0:

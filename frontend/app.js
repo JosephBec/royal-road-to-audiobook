@@ -1402,12 +1402,25 @@ let demoAudio = null;
 
 function renderVoiceDemoList() {
     const el = document.getElementById('voice-demo-list');
-    el.innerHTML = state.voices.map(v => `
+    // Per-voice tuning lives inline on each row rather than behind another
+    // modal — one flat list, no menu inside a menu.
+    const tunable = engineByName(state.settings.engine)?.supports_voice_settings;
+
+    el.innerHTML = state.voices.map(v => {
+        const pause = v.settings?.sentence_pause;
+        return `
         <div class="voice-demo-row">
             <button class="small-btn voice-demo-play" data-voice="${escapeHtml(v.id)}" title="Play demo">▶</button>
             <span class="voice-demo-label">${escapeHtml(v.label)}${v.id === state.settings.voice ? ' <span class="voice-current">✓ current</span>' : ''}</span>
+            ${tunable && pause != null ? `
+            <span class="voice-pause" title="Silence added at the end of every sentence">
+                <button class="small-btn voice-pause-down" data-voice="${escapeHtml(v.id)}">−</button>
+                <span class="voice-pause-value" data-voice="${escapeHtml(v.id)}">${pause.toFixed(2)}s</span>
+                <button class="small-btn voice-pause-up" data-voice="${escapeHtml(v.id)}">+</button>
+            </span>` : ''}
             <button class="secondary-btn btn-small voice-demo-use" data-voice="${escapeHtml(v.id)}">Use</button>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 
     el.querySelectorAll('.voice-demo-play').forEach(btn =>
         btn.addEventListener('click', () => playVoiceDemo(btn)));
@@ -1416,6 +1429,31 @@ function renderVoiceDemoList() {
             await updateSetting('voice', btn.dataset.voice);
             renderVoiceDemoList();
         }));
+    el.querySelectorAll('.voice-pause-down').forEach(btn =>
+        btn.addEventListener('click', () => stepVoicePause(btn.dataset.voice, -0.05)));
+    el.querySelectorAll('.voice-pause-up').forEach(btn =>
+        btn.addEventListener('click', () => stepVoicePause(btn.dataset.voice, +0.05)));
+}
+
+async function stepVoicePause(voiceId, delta) {
+    const voice = state.voices.find(v => v.id === voiceId);
+    if (!voice) return;
+    const s = voice.settings || {};
+    const next = Math.min(s.max ?? 3, Math.max(s.min ?? 0,
+        Math.round(((s.sentence_pause ?? 0.7) + delta) * 100) / 100));
+    try {
+        const result = await api('PATCH',
+            `/api/voices/${encodeURIComponent(voiceId)}/settings?engine=${encodeURIComponent(state.settings.engine)}`,
+            { sentence_pause: next });
+        voice.settings = result.settings;
+        renderVoiceDemoList();
+        // The pause is baked into rendered audio, so cached chapters were
+        // dropped server-side; say so rather than letting it look like nothing
+        // happened until the next chapter re-renders.
+        showToast(`Sentence pause ${next.toFixed(2)}s — cached audio for this voice cleared`);
+    } catch (e) {
+        showToast('Could not save pause: ' + e.message);
+    }
 }
 
 function stopVoiceDemo() {
@@ -1707,12 +1745,58 @@ function openExportModal() {
     document.getElementById('modal-export').style.display = 'flex';
 }
 
+// Measured on this machine's RTX 2070: seconds of audio produced per second
+// of rendering. Chatterbox is ~30x slower than Kokoro, so a range that takes
+// hours on one takes days on the other — worth saying before you start it.
+const ENGINE_THROUGHPUT = { kokoro: 50, chatterbox: 1.9 };
+const WORDS_PER_MINUTE = 155;  // typical narration pace
+
 function updateExportNamePreview() {
     if (!state.currentNovel) return;
     const s = document.getElementById('export-start').value || '?';
     const e = document.getElementById('export-end').value || '?';
     document.getElementById('export-name-preview').textContent =
         `${state.currentNovel.title} - Chapters ${s} - ${e}.m4b`;
+    updateExportEstimate();
+}
+
+function humanDuration(seconds) {
+    if (seconds < 90) return `${Math.round(seconds)}s`;
+    const mins = seconds / 60;
+    if (mins < 90) return `${Math.round(mins)} min`;
+    const hours = mins / 60;
+    if (hours < 36) return `${hours.toFixed(1)} hours`;
+    return `${(hours / 24).toFixed(1)} days`;
+}
+
+function updateExportEstimate() {
+    const el = document.getElementById('export-estimate');
+    if (!el || !state.currentNovel) return;
+    const start = parseInt(document.getElementById('export-start').value, 10);
+    const end = parseInt(document.getElementById('export-end').value, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        el.textContent = '';
+        return;
+    }
+
+    const chapters = end - start + 1;
+    const words = state.chapters.length
+        ? state.chapters.reduce((a, c) => a + (c.word_count || 0), 0) / state.chapters.length
+        : 2500;
+    const audioSeconds = chapters * (words / WORDS_PER_MINUTE) * 60;
+
+    const engineName = state.currentNovel.effective_settings?.engine || state.settings.engine;
+    const rate = ENGINE_THROUGHPUT[engineName] ?? 2;
+    const renderSeconds = audioSeconds / rate;
+
+    const engineLabel = engineByName(engineName)?.label || engineName;
+    let msg = `${chapters} chapters ≈ ${humanDuration(audioSeconds)} of audio · `
+            + `~${humanDuration(renderSeconds)} to render on ${engineLabel}`;
+    if (renderSeconds > 6 * 3600) {
+        msg += '. Runs in the background at lowest priority — playback always wins,'
+             + ' and it resumes where it left off if you restart.';
+    }
+    el.textContent = msg;
 }
 
 function updateExportSpeedDisplay() {

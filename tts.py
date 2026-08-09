@@ -36,6 +36,10 @@ SAMPLE_RATE = 24000
 TEMP_DIR = Path("./temp_audio")
 TEMP_DIR.mkdir(exist_ok=True)
 
+# Fallback inter-segment silence. The real value is per engine+voice via
+# segment_gap_for(); this is only used where no voice context exists.
+SEGMENT_GAP_SECONDS = 0.3
+
 # Thread pool for running blocking TTS on a background thread. Single worker:
 # one GPU, and serializing keeps VRAM predictable.
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -90,12 +94,24 @@ def _synthesize_text_blocking(
     return [seg for seg in engine.synthesize(text, voice, speed) if seg is not None and len(seg)]
 
 
-def _segments_to_wav_bytes(segments: list[np.ndarray], sample_rate: int = SAMPLE_RATE) -> bytes:
+def segment_gap_for(engine_name: str | None, voice: str) -> float:
+    """Silence between segments for a given engine + voice.
+
+    Derived rather than stored so the full WAV, the HLS segment padding and
+    the playlist's own duration maths all agree — including after a restart,
+    when the in-memory streaming state is gone. A saved playback position has
+    to mean the same instant on every one of those timelines.
+    """
+    return engines.get_engine(engine_name).segment_gap(voice)
+
+
+def _segments_to_wav_bytes(segments: list[np.ndarray], sample_rate: int = SAMPLE_RATE,
+                           gap_seconds: float = SEGMENT_GAP_SECONDS) -> bytes:
     """Concatenate audio segments into a single WAV file in memory."""
     if not segments:
         return b""
 
-    silence = np.zeros(int(sample_rate * 0.3), dtype=np.float32)
+    silence = np.zeros(int(sample_rate * gap_seconds), dtype=np.float32)
     parts = []
     for i, seg in enumerate(segments):
         parts.append(seg)
@@ -222,7 +238,8 @@ async def synthesize_chapter_to_file(
                 _synthesize_text_blocking, engine, text, voice, speed
             )
 
-            wav_bytes = _segments_to_wav_bytes(segments, engine.sample_rate)
+            gap = engine.segment_gap(voice)
+            wav_bytes = _segments_to_wav_bytes(segments, engine.sample_rate, gap)
             output_path.write_bytes(wav_bytes)
 
             elapsed = time.time() - start
@@ -278,24 +295,23 @@ def _aac_segment_path(chapter_id: int, index: int) -> Path:
     return TEMP_DIR / f"chapter_{chapter_id}_seg_{index}.aac"
 
 
-# Inter-segment silence baked into the concatenated full file (see
-# _segments_to_wav_bytes). AAC segments get the same amount of trailing pad so
-# the HLS timeline and the full-file timeline line up for progress save/resume.
-SEGMENT_GAP_SECONDS = 0.3
-
-
-def _encode_segment_aac(chapter_id: int, index: int) -> bool:
+def _encode_segment_aac(chapter_id: int, index: int,
+                        gap_seconds: float = SEGMENT_GAP_SECONDS) -> bool:
     """
     Encode a WAV segment to packed ADTS AAC for native HLS playback (iOS).
     Returns False (and logs) if ffmpeg is unavailable or fails — the WAV
     segment fallback still works in that case.
+
+    The trailing pad must match the silence baked into the concatenated full
+    file (see _segments_to_wav_bytes), or the HLS and full-file timelines drift
+    apart and a saved position resumes in the wrong place.
     """
     wav = _segment_path(chapter_id, index)
     aac = _aac_segment_path(chapter_id, index)
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", str(wav),
-        "-af", f"apad=pad_dur={SEGMENT_GAP_SECONDS}",
+        "-af", f"apad=pad_dur={gap_seconds}",
         "-c:a", "aac", "-b:a", "96k",
         str(aac),
     ]
@@ -346,6 +362,7 @@ async def synthesize_chapter_streaming(
     }
 
     engine = await get_engine(engine_name)
+    gap = engine.segment_gap(voice)
     loop = asyncio.get_event_loop()
     all_segments: list[np.ndarray] = []
 
@@ -356,7 +373,7 @@ async def synthesize_chapter_streaming(
                 if audio is not None and len(audio) > 0:
                     all_segments.append(audio)
                     dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
-                    _encode_segment_aac(chapter_id, seg_index)
+                    _encode_segment_aac(chapter_id, seg_index, gap)
                     st = _streaming_state.get(chapter_id)
                     if st is not None:
                         st["segments"].append(dur)
@@ -369,7 +386,7 @@ async def synthesize_chapter_streaming(
 
     # Save complete concatenated file
     if all_segments:
-        wav_bytes = _segments_to_wav_bytes(all_segments, engine.sample_rate)
+        wav_bytes = _segments_to_wav_bytes(all_segments, engine.sample_rate, gap)
         temp_path_for_chapter(chapter_id).write_bytes(wav_bytes)
 
     st = _streaming_state.get(chapter_id)

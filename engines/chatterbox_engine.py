@@ -16,12 +16,15 @@ Two behaviours worth knowing before editing this file:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
 from typing import Iterator, TYPE_CHECKING
 
-from engines.base import TTSEngine, Voice, VOICES_DIR
+from engines.base import (
+    TTSEngine, Voice, VOICES_DIR, MIN_SEGMENT_GAP, MAX_SEGMENT_GAP,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -29,45 +32,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 BUILTIN_VOICE_ID = "cb_builtin"
-# Turbo degrades and eventually truncates on long input; ~300 chars keeps every
-# chunk well inside the window while staying long enough for natural prosody.
+# Hard ceiling per chunk. Turbo's tokenizer truncates past its window, so no
+# chunk may exceed this — but chunks are normally one sentence each, well under.
 MAX_CHUNK_CHARS = 300
+
+# Chatterbox runs sentences together. It emits ~0.47s of its own silence at a
+# period, so the inherited 0.3s gap was inaudible; 0.7s is the first value that
+# reads as a deliberate beat rather than a stumble.
+DEFAULT_SENTENCE_PAUSE = 0.7
+SETTINGS_FILENAME = "voice_settings.json"
 # The model asserts on reference audio of 5s or less.
 MIN_REFERENCE_SECONDS = 5.0
 REFERENCE_SUFFIXES = (".wav", ".mp3", ".flac", ".ogg", ".m4a")
 
 
 def _split_chunks(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
-    """Split text into synthesis chunks on paragraph, then sentence, boundaries.
+    """Split text into one chunk per sentence.
 
-    Paragraphs are kept apart so the model doesn't run them together, and an
-    over-long sentence is broken on commas rather than truncated.
+    One sentence per chunk is what makes the inter-segment pause land on every
+    period. Packing several sentences into a 300-char chunk (the previous
+    behaviour) left the model to pace the interior itself, and it rushes — the
+    result reads as one long run-on sentence.
+
+    An over-long sentence is still broken on commas rather than truncated,
+    because Turbo's tokenizer silently drops anything past its window.
     """
     chunks: list[str] = []
     for para in (p.strip() for p in re.split(r"\n\s*\n|\n", text) if p.strip()):
-        sentences = re.split(r"(?<=[.!?\"'”])\s+", para)
-        current = ""
-        for sentence in sentences:
+        for sentence in re.split(r"(?<=[.!?\"'”])\s+", para):
+            sentence = sentence.strip()
             while len(sentence) > max_chars:
-                # No sentence break available — cut at the last comma/space that fits.
                 cut = max(sentence.rfind(", ", 0, max_chars),
                           sentence.rfind(" ", 0, max_chars))
                 if cut <= 0:
                     cut = max_chars
                 head, sentence = sentence[:cut].strip(), sentence[cut:].strip()
-                if current:
-                    chunks.append(current)
-                    current = ""
-                chunks.append(head)
-            if not sentence:
-                continue
-            if current and len(current) + len(sentence) + 1 > max_chars:
-                chunks.append(current)
-                current = sentence
-            else:
-                current = f"{current} {sentence}".strip()
-        if current:
-            chunks.append(current)
+                if head:
+                    chunks.append(head)
+            if sentence:
+                chunks.append(sentence)
     return chunks
 
 
@@ -111,6 +114,59 @@ class ChatterboxEngine(TTSEngine):
 
     def default_voice(self) -> str:
         return BUILTIN_VOICE_ID
+
+    # ----- per-voice tuning -----
+    #
+    # Stored in one JSON file beside the clips rather than a DB table: the
+    # voices/ folder is already the source of truth for what exists, so the
+    # tuning lives with it and survives a database reset.
+
+    def _settings_path(self) -> Path:
+        return VOICES_DIR / SETTINGS_FILENAME
+
+    def _load_settings(self) -> dict:
+        path = self._settings_path()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            logger.exception("Could not read %s — using defaults", path)
+            return {}
+
+    def segment_gap(self, voice_id: str) -> float:
+        raw = self._load_settings().get(voice_id, {}).get("sentence_pause")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_SENTENCE_PAUSE
+        return max(MIN_SEGMENT_GAP, min(MAX_SEGMENT_GAP, value))
+
+    def voice_settings(self, voice_id: str) -> dict:
+        return {
+            "sentence_pause": self.segment_gap(voice_id),
+            "sentence_pause_default": DEFAULT_SENTENCE_PAUSE,
+            "min": MIN_SEGMENT_GAP,
+            "max": MAX_SEGMENT_GAP,
+        }
+
+    def set_voice_settings(self, voice_id: str, **values) -> dict:
+        if "sentence_pause" in values:
+            pause = float(values["sentence_pause"])
+            if not (MIN_SEGMENT_GAP <= pause <= MAX_SEGMENT_GAP):
+                raise ValueError(
+                    f"sentence_pause must be between {MIN_SEGMENT_GAP} and {MAX_SEGMENT_GAP}")
+            settings = self._load_settings()
+            settings.setdefault(voice_id, {})["sentence_pause"] = round(pause, 2)
+            VOICES_DIR.mkdir(exist_ok=True)
+            tmp = self._settings_path().with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, sort_keys=True)
+            tmp.replace(self._settings_path())  # atomic: never a half-written file
+            logger.info("Voice %s sentence_pause -> %.2fs", voice_id, pause)
+        return self.voice_settings(voice_id)
 
     # ----- model -----
 

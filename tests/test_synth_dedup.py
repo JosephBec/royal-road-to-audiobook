@@ -29,6 +29,9 @@ def tts_env(tmp_path, monkeypatch):
         sample_rate = 24000
         supports_speed = True
 
+        def segment_gap(self, voice):
+            return 0.3
+
     async def fake_engine(engine_name=None):
         return FakeEngine()
 

@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
 
 from database import init_db, SessionLocal, retention_policy
 from routers import novels, chapters, progress, settings, exports, epubs
@@ -192,8 +193,10 @@ async def list_engines():
             "supports_speed": engine.supports_speed,
             "supports_custom_voices": any(v.custom for v in engine.voices()) or name == "chatterbox",
             "default_voice": engine.default_voice(),
+            "supports_voice_settings": engine.supports_voice_settings(),
             "voices": [
-                {"id": v.id, "label": v.label, "custom": v.custom}
+                {"id": v.id, "label": v.label, "custom": v.custom,
+                 "settings": engine.voice_settings(v.id)}
                 for v in engine.voices()
             ],
         })
@@ -236,6 +239,56 @@ DEMO_TEXT = (
     "\"You're late,\" the archivist said, not looking up from her ledger."
 )
 VOICE_DEMO_DIR = Path(__file__).parent / "voice_demos"
+
+
+class VoiceSettingsRequest(BaseModel):
+    sentence_pause: float | None = None
+
+
+@app.patch("/api/voices/{voice_id}/settings")
+async def update_voice_settings(voice_id: str, req: VoiceSettingsRequest,
+                                engine: str | None = None):
+    """Tune one voice. Cached audio for novels using it is dropped, since the
+    pause is baked into the rendered files rather than applied at playback."""
+    import engines as engine_registry
+    from database import SessionLocal, Novel, Settings, effective_settings
+    from tts import remove_chapter_audio
+
+    impl = engine_registry.get_engine(engine)
+    if impl.resolve_voice(voice_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown voice")
+    if not impl.supports_voice_settings():
+        raise HTTPException(status_code=400,
+                            detail=f"{impl.label} has no per-voice settings")
+
+    values = {k: v for k, v in req.model_dump().items() if v is not None}
+    if not values:
+        return {"voice": voice_id, "settings": impl.voice_settings(voice_id)}
+    try:
+        settings = impl.set_voice_settings(voice_id, **values)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # The demo clip is cached per voice, so drop it too or the preview would
+    # keep playing the old pause and the setting would look like it did nothing.
+    (VOICE_DEMO_DIR / f"{voice_id}.wav").unlink(missing_ok=True)
+
+    db = SessionLocal()
+    try:
+        globals_row = db.query(Settings).first()
+        stale = set()
+        for novel in db.query(Novel).all():
+            eff = effective_settings(novel, globals_row)
+            if eff["engine"] == impl.name and eff["voice"] == voice_id:
+                stale.update(ch.id for ch in novel.chapters)
+        if stale:
+            remove_chapter_audio(stale)
+            logger.info("Voice %s retuned — dropped audio for %d chapter(s)",
+                        voice_id, len(stale))
+    finally:
+        db.close()
+
+    return {"voice": voice_id, "settings": settings}
 
 
 @app.get("/api/voices/{voice_id}/demo")

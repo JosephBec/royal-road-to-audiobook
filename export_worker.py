@@ -258,7 +258,7 @@ async def _synthesize_chapter_wav(job_id, chapter_id, title, voice, speed, wav_p
         segments.extend(await tts.synthesize_batch(batch, voice, speed, engine_name))
     if not segments:
         raise RuntimeError(f"no audio produced for '{title}'")
-    silence = np.zeros(int(engine.sample_rate * 0.3), dtype=np.float32)
+    silence = np.zeros(int(engine.sample_rate * engine.segment_gap(voice)), dtype=np.float32)
     parts = []
     for i, seg in enumerate(segments):
         parts.append(seg)

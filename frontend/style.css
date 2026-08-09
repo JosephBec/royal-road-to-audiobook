@@ -933,6 +933,22 @@ a:hover { color: var(--accent-hover); }
     font-weight: 500;
 }
 
+/* Per-voice sentence pause stepper, inline on each Voices row */
+.voice-pause {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    white-space: nowrap;
+}
+.voice-pause-value {
+    min-width: 3.2em;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
 /* Engine-specific note under the model picker; collapses when empty */
 .setting-hint {
     display: block;

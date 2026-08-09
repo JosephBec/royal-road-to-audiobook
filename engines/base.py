@@ -29,6 +29,15 @@ VOICES_DIR = Path(os.environ.get(
 ))
 
 
+# Silence inserted between synthesized segments. Kokoro keeps the original
+# 0.3s; cloning engines default higher because Chatterbox runs sentences
+# together (it emits ~0.47s at a period on its own, so anything at or below
+# that is inaudible — it just merges into the model's own pause).
+DEFAULT_SEGMENT_GAP = 0.3
+MIN_SEGMENT_GAP = 0.0
+MAX_SEGMENT_GAP = 3.0
+
+
 @dataclass(frozen=True)
 class Voice:
     """A selectable voice. `id` is what gets stored in settings."""
@@ -77,6 +86,28 @@ class TTSEngine:
 
     def resolve_voice(self, voice_id: str) -> Voice | None:
         return next((v for v in self.voices() if v.id == voice_id), None)
+
+    # ----- per-voice tuning -----
+
+    def segment_gap(self, voice_id: str) -> float:
+        """Silence in seconds inserted between this voice's segments.
+
+        Read wherever audio is assembled — the full WAV, the HLS segment
+        padding and exports — so all three timelines stay aligned. A saved
+        playback position must mean the same instant in every one of them.
+        """
+        return DEFAULT_SEGMENT_GAP
+
+    def voice_settings(self, voice_id: str) -> dict:
+        """Tunable values for one voice, as shown in the UI."""
+        return {"sentence_pause": self.segment_gap(voice_id)}
+
+    def set_voice_settings(self, voice_id: str, **values) -> dict:
+        """Persist tuning for one voice. Engines that support none say so."""
+        raise NotImplementedError(f"{self.name} has no per-voice settings")
+
+    def supports_voice_settings(self) -> bool:
+        return type(self).set_voice_settings is not TTSEngine.set_voice_settings
 
     def load(self) -> None:
         """Load model weights. Blocking; called once on the TTS worker thread."""
