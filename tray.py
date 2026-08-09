@@ -35,9 +35,40 @@ MAIN_SCRIPT = os.path.join(PROJECT_DIR, "main.py")
 # Use venv python if available, otherwise system python
 PYTHON = VENV_PYTHON if os.path.exists(VENV_PYTHON) else sys.executable
 
+# Loopback port used purely as a single-instance mutex (nothing listens on it).
+INSTANCE_LOCK_PORT = 49731
+
 # ── Globals ──
 server_process = None
 tray_icon = None
+_instance_lock = None
+
+
+def acquire_single_instance() -> bool:
+    """Claim the single-instance lock. False if another tray already holds it.
+
+    A bound socket is used rather than a PID file because it cannot go stale:
+    if the tray is killed the OS frees the port instantly, whereas a PID file
+    left behind by a hard kill would block every future launch.
+
+    Without this, running RoyalRoadTTS.bat while a tray is already up starts a
+    second tray. The extra tray finds the port in use so it never spawns its
+    own server, and quitting either one kills the shared server out from under
+    the other — which is how the duplicate trays and orphaned servers happen.
+    """
+    global _instance_lock
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        # Windows otherwise permits a second bind to the same address.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        sock.bind(("127.0.0.1", INSTANCE_LOCK_PORT))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        return False
+    _instance_lock = sock  # held for the life of the process
+    return True
 
 
 def create_book_icon(size=64):
@@ -259,6 +290,13 @@ def create_tray():
 
 
 def main():
+    if not acquire_single_instance():
+        # A tray is already running. Opening the app is more useful than
+        # exiting silently — under pythonw there is no console to explain why
+        # double-clicking the .bat appeared to do nothing.
+        webbrowser.open(URL)
+        return
+
     # Start server in background
     start_server()
 
