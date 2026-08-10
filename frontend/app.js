@@ -1317,6 +1317,28 @@ function setupAudioEvents() {
 }
 
 // ===== Media Session (lock screen controls) =====
+
+// One definition for the in-app buttons and the lock screen, so the two can
+// never drift apart.
+const SKIP_BACK_SECONDS = 15;
+const SKIP_FORWARD_SECONDS = 30;
+
+// What a transport "pause" command actually means.
+//
+// iOS aims the command at whatever element is playing. Once the listener
+// pauses, that is the silent keepalive rather than the chapter — so pressing
+// play on a headset arrives here as "pause". Treating it as a no-op is what
+// made every resume take two presses: the first was absorbed and only the
+// second came through as "play".
+//
+// Immediately after the keepalive starts, iOS emits a pause of its own while
+// the session settles. That one has to be ignored, or starting the keepalive
+// would immediately start playback nobody asked for.
+function pauseCommandIntent(audioPaused, msSinceKeepaliveStart) {
+    if (!audioPaused) return 'pause';
+    return msSinceKeepaliveStart < KEEPALIVE_SETTLE_MS ? 'ignore' : 'play';
+}
+
 function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
@@ -1339,23 +1361,31 @@ function updateMediaSession() {
         state.audio.play().catch(() => {});
     });
     navigator.mediaSession.setActionHandler('pause', () => {
-        if (state.audio.paused) {
-            // Already paused, so this is iOS pausing the keepalive rather than
-            // a real request. Restart it: stopping here tore down the very
-            // session it exists to hold open, and one stray tap on the lock
-            // screen then broke resume entirely.
-            startSilentKeepalive();
+        const intent = pauseCommandIntent(state.audio.paused,
+                                          Date.now() - keepaliveStartedAt);
+        if (intent === 'pause') {
+            state.audio.pause();
+        } else if (intent === 'play') {
+            stopSilentKeepalive();
+            state.audio.play().catch(() => {});
+        } else {
+            startSilentKeepalive(false);   // re-arm without extending the window
             assertPausedState();
-            return;
         }
-        state.audio.pause();
     });
     // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
     // (often "10") but the page controls the actual jump.
-    navigator.mediaSession.setActionHandler('seekbackward', () => seekRelative(-15));
-    navigator.mediaSession.setActionHandler('seekforward', () => seekRelative(30));
-    navigator.mediaSession.setActionHandler('previoustrack', () => playAdjacentChapter(-1));
-    navigator.mediaSession.setActionHandler('nexttrack', () => playAdjacentChapter(1));
+    navigator.mediaSession.setActionHandler('seekbackward', () => seekRelative(-SKIP_BACK_SECONDS));
+    navigator.mediaSession.setActionHandler('seekforward', () => seekRelative(SKIP_FORWARD_SECONDS));
+    // Track buttons skip within the chapter, they do not change chapter.
+    //
+    // A double-press on a headset is "next track", and mapping that to the
+    // next chapter meant a mis-press threw away your place in a chapter that
+    // may have taken twenty minutes to render — with no way to undo it from
+    // the headset. Seeking is what someone reaching for a button mid-listen
+    // means, and the worst case is being thirty seconds out.
+    navigator.mediaSession.setActionHandler('previoustrack', () => seekRelative(-SKIP_BACK_SECONDS));
+    navigator.mediaSession.setActionHandler('nexttrack', () => seekRelative(SKIP_FORWARD_SECONDS));
     // Without a seekto handler, the lock-screen progress bar is read-only
     try {
         navigator.mediaSession.setActionHandler('seekto', (details) => {
@@ -1388,6 +1418,10 @@ const KEEPALIVE_MAX_MS = 45 * 60 * 1000;
 let silentLoop = null;
 let keepaliveExpiry = null;
 let keepaliveActive = false;
+// When the keepalive last started. iOS emits a pause of its own while the
+// session settles, and that has to be told apart from a real button press.
+let keepaliveStartedAt = 0;
+const KEEPALIVE_SETTLE_MS = 1000;
 
 function keepaliveEnabled() {
     return localStorage.getItem(KEEPALIVE_KEY) === '1';
@@ -1412,7 +1446,10 @@ function silentWavUrl() {
     return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
 }
 
-function startSilentKeepalive() {
+// restamp=false re-arms the loop without resetting the settle window. Without
+// that distinction, iOS emitting a pause every settle period would keep
+// pushing the window forward and no button press would ever get through.
+function startSilentKeepalive(restamp = true) {
     if (!keepaliveEnabled()) return;
     if (!silentLoop) {
         silentLoop = new Audio(silentWavUrl());
@@ -1421,6 +1458,7 @@ function startSilentKeepalive() {
     }
     silentLoop.play().catch(() => {});   // blocked before any user gesture; harmless
     keepaliveActive = true;
+    if (restamp) keepaliveStartedAt = Date.now();
     // Drop the timeline while the silent loop holds the session.
     //
     // iOS takes its Now Playing item from whichever element is actually
@@ -2686,8 +2724,8 @@ function setupEventListeners() {
 
     // Player controls
     document.getElementById('btn-play-pause').addEventListener('click', togglePlayPause);
-    document.getElementById('btn-back-15').addEventListener('click', () => seekRelative(-15));
-    document.getElementById('btn-fwd-30').addEventListener('click', () => seekRelative(30));
+    document.getElementById('btn-back-15').addEventListener('click', () => seekRelative(-SKIP_BACK_SECONDS));
+    document.getElementById('btn-fwd-30').addEventListener('click', () => seekRelative(SKIP_FORWARD_SECONDS));
     document.getElementById('btn-prev-chapter').addEventListener('click', () => playAdjacentChapter(-1));
     document.getElementById('btn-next-chapter').addEventListener('click', () => playAdjacentChapter(1));
 
