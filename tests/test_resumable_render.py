@@ -96,6 +96,49 @@ def test_discard_from_zero_clears_everything(temp_dir):
     assert not any(tts._segment_path(6, i).exists() for i in range(4))
 
 
+def test_discard_reaches_segments_behind_a_gap(temp_dir):
+    """Segments on disk are not always a prefix.
+
+    A retention sweep or an interrupted render can leave a hole, and a scan
+    that stops at the first missing index never sees what is past it. Those
+    survivors belong to a render that no longer applies: the next render only
+    overwrites the indices it produces, so a shorter one would leave the old
+    tail behind to be served as the end of the new chapter.
+    """
+    for index in (26, 27, 28):
+        tts._segment_path(20, index).write_bytes(b"old")
+        tts._aac_segment_path(20, index).write_bytes(b"old")
+
+    tts.discard_segments_from(20, 0)
+
+    assert not any(tts._segment_path(20, i).exists() for i in (26, 27, 28))
+    assert not any(tts._aac_segment_path(20, i).exists() for i in (26, 27, 28))
+
+
+def test_discard_keeps_segments_before_the_mark_across_a_gap(temp_dir):
+    """Only the tail goes. A hole must not be read as the end of the run."""
+    for index in (0, 1, 5, 9):
+        tts._segment_path(21, index).write_bytes(b"x")
+
+    tts.discard_segments_from(21, 5)
+
+    assert [tts._segment_path(21, i).exists() for i in (0, 1, 5, 9)] == \
+        [True, True, False, False]
+
+
+def test_discard_trims_durations_for_removed_segments(temp_dir):
+    """A duration left behind for a deleted segment makes the playlist
+    advertise audio that is no longer on disk."""
+    fp = _fingerprint()
+    _write_segments(22, 4)
+    for index in range(4):
+        tts.record_segment_duration(22, index, 1.0, fp)
+
+    tts.discard_segments_from(22, 2)
+
+    assert tts._read_sidecar(22)["durations"] == [1.0, 1.0]
+
+
 # ----- sidecar round-trip -----
 
 def test_durations_and_fingerprint_coexist(temp_dir):

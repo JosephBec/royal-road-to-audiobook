@@ -407,16 +407,46 @@ def resumable_segment_count(chapter_id: int, fingerprint: dict) -> int:
     return max(0, index - 1)
 
 
+def _existing_segment_indices(chapter_id: int) -> list[int]:
+    """Every segment index with an artifact on disk, gaps included.
+
+    Globbed rather than counted upward: the set is not necessarily a prefix.
+    Retention sweeps and interrupted renders both leave holes, and a scan that
+    stops at the first hole cannot see what is past it.
+    """
+    prefix = f"chapter_{chapter_id}_seg_"
+    indices = set()
+    for pattern in (f"{prefix}*.wav", f"{prefix}*.aac"):
+        for path in TEMP_DIR.glob(pattern):
+            try:
+                indices.add(int(path.stem[len(prefix):]))
+            except ValueError:
+                continue
+    return sorted(indices)
+
+
 def discard_segments_from(chapter_id: int, start_index: int):
-    """Remove segment artifacts at or beyond an index (stale tail of a render)."""
-    index = start_index
-    while True:
-        wav, aac = _segment_path(chapter_id, index), _aac_segment_path(chapter_id, index)
-        if not wav.exists() and not aac.exists():
-            break
-        wav.unlink(missing_ok=True)
-        aac.unlink(missing_ok=True)
-        index += 1
+    """Remove segment artifacts at or beyond an index (stale tail of a render).
+
+    Every index at or past the mark goes, not just the run starting there.
+    Segments surviving behind a gap belong to a render that no longer matches
+    the one about to be written, and the next render only overwrites the
+    indices it actually produces — a shorter one would leave the old tail in
+    place to be served as the end of the new chapter.
+    """
+    for index in _existing_segment_indices(chapter_id):
+        if index < start_index:
+            continue
+        _segment_path(chapter_id, index).unlink(missing_ok=True)
+        _aac_segment_path(chapter_id, index).unlink(missing_ok=True)
+
+    # Keep the sidecar honest about what exists. A duration left behind for a
+    # deleted segment is what makes a playlist advertise audio that 404s.
+    data = _read_sidecar(chapter_id)
+    durations = data.get("durations")
+    if isinstance(durations, list) and len(durations) > start_index:
+        data["durations"] = durations[:start_index]
+        _write_sidecar(chapter_id, data)
 
 
 def _recorded_gap(chapter_id: int, index: int, fallback: float) -> float:
