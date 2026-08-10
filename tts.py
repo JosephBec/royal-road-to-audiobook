@@ -513,6 +513,7 @@ async def _synthesize_chapter_streaming(
     engine_name: str | None = None,
     chunk_voices: list[str] | None = None,
     max_seconds: float | None = None,
+    yield_to_interactive: bool = False,
 ):
     """
     Synthesize a chapter segment by segment for Instant Play.
@@ -531,6 +532,11 @@ async def _synthesize_chapter_streaming(
 
     A render interrupted for any reason (restart, crash) resumes from the
     segments already on disk rather than starting over.
+
+    `yield_to_interactive` makes a background render stand aside between
+    chunks whenever the user is waiting on something. Checking only before a
+    chapter starts is not enough — one chapter is minutes of work on
+    Chatterbox, and pressing play in the middle of it meant waiting it out.
     """
     # Check if already fully synthesized
     if temp_path_for_chapter(chapter_id).exists():
@@ -596,6 +602,8 @@ async def _synthesize_chapter_streaming(
             if max_seconds is not None and                     _streaming_state[chapter_id]["total_duration"] >= max_seconds:
                 stopped_early = True
                 break
+            while yield_to_interactive and interactive_busy():
+                await asyncio.sleep(1)
             chunk_voice = voice
             if chunk_voices and chunk_number < len(chunk_voices):
                 chunk_voice = chunk_voices[chunk_number] or voice

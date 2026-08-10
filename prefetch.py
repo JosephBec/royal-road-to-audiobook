@@ -184,7 +184,7 @@ async def head_start_pass():
                 continue
             await tts.synthesize_chapter_streaming(
                 chapter_id, f"{title}\n\n{text}", voice, 1.0, engine_name,
-                None, HEAD_START_SECONDS)
+                None, HEAD_START_SECONDS, yield_to_interactive=True)
         except Exception:
             logger.exception("Head start failed for chapter %d", chapter_id)
 

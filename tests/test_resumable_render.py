@@ -233,3 +233,38 @@ def test_concurrent_renders_do_not_destroy_each_other(fake_engine, temp_dir):
     assert tts.temp_path_for_chapter(30).exists()
     assert all(tts._segment_path(30, i).exists() for i in range(6))
     assert not tts._segment_path(30, 6).exists()
+
+
+def test_background_render_yields_mid_chapter(fake_engine, temp_dir, monkeypatch):
+    """A head start must stand aside the moment the user presses play.
+
+    Checking only before a chapter starts is not enough — one chapter is
+    minutes of work on Chatterbox, so pressing play in the middle meant
+    waiting it out.
+    """
+    import asyncio
+
+    busy = {"value": True}
+    monkeypatch.setattr(tts, "interactive_busy", lambda: busy["value"])
+
+    async def scenario():
+        task = asyncio.create_task(tts.synthesize_chapter_streaming(
+            40, TEXT, "cb_yearsley", 1.0, "chatterbox",
+            None, None, yield_to_interactive=True))
+        await asyncio.sleep(0.2)
+        rendered_while_busy = len(fake_engine.rendered)
+        busy["value"] = False          # user's chapter finished
+        await task
+        return rendered_while_busy
+
+    rendered_while_busy = asyncio.run(scenario())
+    assert rendered_while_busy == 0, "should not have rendered while blocked"
+    assert len(fake_engine.rendered) == 6, "and should finish once free"
+
+
+def test_foreground_render_does_not_yield(fake_engine, temp_dir, monkeypatch):
+    """The chapter the user is waiting on must never stand aside for itself."""
+    import asyncio
+    monkeypatch.setattr(tts, "interactive_busy", lambda: True)
+    asyncio.run(tts.synthesize_chapter_streaming(41, TEXT, "cb_yearsley", 1.0, "chatterbox"))
+    assert len(fake_engine.rendered) == 6
