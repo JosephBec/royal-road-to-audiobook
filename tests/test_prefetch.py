@@ -84,6 +84,49 @@ def test_no_cleanup_when_nothing_queued(pf_env):
     assert cleanup_calls == []
 
 
+def test_head_start_runs_before_render_ahead(pf_env, monkeypatch):
+    """The opening of the chapter being listened to outranks the whole of the
+    chapters that are not.
+
+    Pressing play enqueues the next three chapters, and each is rendered in
+    full — twenty minutes apiece at the throughput Chatterbox manages. With
+    the head start at the end of the drain, the first two minutes of the
+    chapter under the playhead sat behind an hour of work for chapters the
+    listener had not reached, so it was still cold when they pressed play.
+    """
+    prefetch, tts, synth_calls, _, _ = pf_env
+    order = []
+
+    async def fake_head_start():
+        order.append("head-start")
+    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+
+    original = prefetch._process_one
+
+    async def tracking_process(item):
+        order.append(f"full-render:{item[0]}")
+        await original(item)
+    monkeypatch.setattr(prefetch, "_process_one", tracking_process)
+
+    prefetch.enqueue(_targets(1, 2, 3), "af_heart")
+    asyncio.run(prefetch.drain_once())
+
+    assert order == ["head-start", "full-render:1", "full-render:2", "full-render:3"]
+
+
+def test_head_start_is_skipped_when_nothing_is_queued(pf_env, monkeypatch):
+    """An idle worker must not spin the GPU up on every wake."""
+    prefetch, _, _, _, _ = pf_env
+    calls = []
+
+    async def fake_head_start():
+        calls.append(1)
+    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+
+    asyncio.run(prefetch.drain_once())
+    assert calls == []
+
+
 def test_is_busy_false_after_drain(pf_env):
     prefetch, tts, synth_calls, _, _ = pf_env
     prefetch.enqueue(_targets(1, 2), "af_heart")

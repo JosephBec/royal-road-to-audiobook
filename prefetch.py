@@ -221,19 +221,19 @@ def _run_retention_cleanup():
 
 
 async def drain_once():
-    """Process everything currently queued, then run retention cleanup once.
+    """Head start first, then everything queued, then retention cleanup once.
 
     This is both the worker's per-wake unit of work and the test seam.
     """
     queue = _ensure_queue()
-    processed = False
+    if queue.empty():
+        return
+    # The opening of what you are listening to outranks the whole of what you
+    # are not. See _worker_loop.
+    await head_start_pass()
     while not queue.empty():
-        item = queue.get_nowait()
-        await _process_one(item)
-        processed = True
-    if processed:
-        _run_retention_cleanup()
-        await head_start_pass()
+        await _process_one(queue.get_nowait())
+    _run_retention_cleanup()
 
 
 async def _worker_loop():
@@ -242,8 +242,23 @@ async def _worker_loop():
         # Block for the first item, then drain the rest as a batch so cleanup
         # runs once per burst rather than per chapter.
         first = await queue.get()
+
+        # Head start before render-ahead, not after it.
+        #
+        # Pressing play enqueues the next three chapters, and _process_one
+        # renders each one in full — twenty minutes apiece at the ~1.4x
+        # realtime Chatterbox manages, so an hour before the queue drains.
+        # Running the head start at the end meant the opening two minutes of
+        # the chapter actually being listened to was queued behind an hour of
+        # work for chapters not yet reached. The cache filled up with the
+        # wrong chapters: complete renders of ones nobody had opened, nothing
+        # for the one under the playhead.
+        #
+        # It is cheap to put first — 120 seconds of audio per active novel,
+        # skipped entirely for any chapter already on disk.
+        await head_start_pass()
+
         await _process_one(first)
         while not queue.empty():
             await _process_one(queue.get_nowait())
         _run_retention_cleanup()
-        await head_start_pass()
