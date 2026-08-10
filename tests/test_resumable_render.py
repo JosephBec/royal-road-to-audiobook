@@ -209,3 +209,27 @@ def test_completed_chapter_is_not_re_rendered(fake_engine, temp_dir):
     fake_engine.rendered.clear()
     asyncio.run(tts.synthesize_chapter_streaming(23, TEXT, "cb_yearsley", 1.0, "chatterbox"))
     assert fake_engine.rendered == []
+
+
+def test_concurrent_renders_do_not_destroy_each_other(fake_engine, temp_dir):
+    """Playback and the head-start pass can target the same chapter.
+
+    Each computes a resume point and discards the tail beyond it, so without a
+    per-chapter lock the second caller deletes the first caller's segments —
+    observed live as a chapter's progress collapsing from 106 segments to 12.
+    """
+    import asyncio
+
+    async def both():
+        await asyncio.gather(
+            tts.synthesize_chapter_streaming(
+                30, TEXT, "cb_yearsley", 1.0, "chatterbox", None, max_seconds=3),
+            tts.synthesize_chapter_streaming(30, TEXT, "cb_yearsley", 1.0, "chatterbox"),
+        )
+
+    asyncio.run(both())
+
+    # Serialized, so every sentence exists exactly once and the chapter finished.
+    assert tts.temp_path_for_chapter(30).exists()
+    assert all(tts._segment_path(30, i).exists() for i in range(6))
+    assert not tts._segment_path(30, 6).exists()

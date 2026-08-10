@@ -459,7 +459,28 @@ def _save_segment_wav(chapter_id: int, index: int, audio: np.ndarray,
     return len(audio) / sample_rate
 
 
-async def synthesize_chapter_streaming(
+async def synthesize_chapter_streaming(*args, **kwargs):
+    """Serialize streaming renders per chapter, then delegate.
+
+    Two concurrent renders of the same chapter used to merely duplicate work.
+    Now that partial renders are resumable each one computes a resume point and
+    discards the tail beyond it, so a second caller actively deletes the first
+    caller's segments — playback and the head-start pass were destroying each
+    other's progress. The file-based path has always taken this lock; the
+    streaming path needs it for the same reason and more urgently.
+    """
+    chapter_id = kwargs.get("chapter_id", args[0] if args else None)
+    lock = _synth_locks.setdefault(chapter_id, asyncio.Lock())
+    async with lock:
+        try:
+            return await _synthesize_chapter_streaming(*args, **kwargs)
+        finally:
+            # Safe to drop: a later caller re-checks the completed file and the
+            # on-disk segments, so nothing depends on the lock outliving this.
+            _synth_locks.pop(chapter_id, None)
+
+
+async def _synthesize_chapter_streaming(
     chapter_id: int,
     text: str,
     voice: str = "af_heart",
