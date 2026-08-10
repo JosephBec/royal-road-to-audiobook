@@ -811,7 +811,14 @@ async function playFullFile(chapterId) {
         try {
             const progress = await api('GET', `/api/progress/${playingNovelId}`);
             if (progress.chapter_id === chapterId && progress.position_seconds > 0) {
-                state.audio.currentTime = progress.position_seconds;
+                // Clamp: a position beyond the audio's length can only be
+                // wrong, and silently seeking there drops you most of the way
+                // through a chapter you have never heard.
+                const dur = state.audio.duration;
+                const pos = progress.position_seconds;
+                state.audio.currentTime = (isFinite(dur) && dur > 0)
+                    ? Math.min(pos, Math.max(0, dur - 1))
+                    : pos;
             }
         } catch (e) {}
     }
@@ -1004,8 +1011,11 @@ async function playInstantSegments(chapterId) {
                     state._instantSwapped = true;
                     stopInstantPlay();
 
-                    // Account for inter-segment silence in full file
-                    const silencePerGap = 0.3;
+                    // Account for inter-segment silence in the full file.
+                    // The gap is per engine+voice (0.7s on a tuned Chatterbox
+                    // voice, 0.3s on Kokoro), so ask rather than assume —
+                    // hardcoding 0.3 drifted further with every segment.
+                    const silencePerGap = freshData.segment_gap ?? 0.3;
                     const numGaps = Math.max(0, nextSeg - 1);
                     const seekTo = state._instantElapsed + (numGaps * silencePerGap);
 

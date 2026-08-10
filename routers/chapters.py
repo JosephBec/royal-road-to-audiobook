@@ -342,6 +342,11 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
     if streaming:
         synthesis_complete = streaming.get("complete", False)
 
+    novel = db.query(Novel).filter(Novel.id == chapter.novel_id).first()
+    settings = db.query(Settings).first()
+    eff = effective_settings(novel, settings)
+    gap = segment_gap_for(eff["engine"], eff["voice"])
+
     # If no segments found but full file exists, report file-only
     if seg_index == 0 and file_ready:
         return {
@@ -351,6 +356,7 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
             "complete": True,
             "total_duration": full_status["duration_seconds"] or 0.0,
             "file_ready": True,
+            "segment_gap": gap,
         }
 
     return {
@@ -360,6 +366,7 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
         "complete": synthesis_complete,
         "total_duration": total_duration,
         "file_ready": file_ready,
+        "segment_gap": gap,
     }
 
 
