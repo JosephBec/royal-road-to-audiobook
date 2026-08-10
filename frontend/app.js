@@ -1127,10 +1127,11 @@ function setupAudioEvents() {
         if (!state.isSynthesizing) {
             document.getElementById('btn-play-pause').textContent = '▶';
         }
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-        // Hold the audio session open so the lock-screen play button keeps
-        // working after the first few seconds.
+        // Order matters: starting a media element flips iOS's displayed
+        // state to "playing", so assert paused *after* the keepalive, and
+        // again a tick later once iOS has settled.
         startSilentKeepalive();
+        assertPausedState();
         saveProgress();
     });
 
@@ -1219,9 +1220,17 @@ function updateMediaSession() {
     // Explicit handlers — a toggle here desyncs when iOS's idea of the state
     // differs from ours, which broke resume from the lock screen.
     navigator.mediaSession.setActionHandler('play', () => {
+        stopSilentKeepalive();
         state.audio.play().catch(() => {});
     });
     navigator.mediaSession.setActionHandler('pause', () => {
+        if (state.audio.paused) {
+            // Already paused: this is the keepalive being paused, not a real
+            // request. Stop it and keep the state honest.
+            stopSilentKeepalive();
+            assertPausedState();
+            return;
+        }
         state.audio.pause();
     });
     // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
@@ -1255,7 +1264,12 @@ function updateMediaSession() {
 // so it is opt-in and stored per device — it only matters on iOS.
 
 const KEEPALIVE_KEY = 'iosKeepSessionAlive';
+// Stop holding the session open after this long. The bug only bites for a
+// listener coming back to a paused book; keeping a silent track running all
+// night to serve that is a battery cost with no benefit.
+const KEEPALIVE_MAX_MS = 45 * 60 * 1000;
 let silentLoop = null;
+let keepaliveExpiry = null;
 
 function keepaliveEnabled() {
     return localStorage.getItem(KEEPALIVE_KEY) === '1';
@@ -1288,10 +1302,28 @@ function startSilentKeepalive() {
         silentLoop.volume = 0;
     }
     silentLoop.play().catch(() => {});   // blocked before any user gesture; harmless
+    if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
+    keepaliveExpiry = setTimeout(stopSilentKeepalive, KEEPALIVE_MAX_MS);
 }
 
 function stopSilentKeepalive() {
+    if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
     if (silentLoop) silentLoop.pause();
+}
+
+function assertPausedState() {
+    // iOS decides the displayed state from whether a media element is playing,
+    // so the silent loop makes it read "playing" while we are actually paused.
+    // Re-asserting after it starts — and again once iOS settles — keeps the
+    // lock screen honest. Without this the first tap only corrects the display
+    // and a second is needed to actually resume.
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = 'paused';
+    setTimeout(() => {
+        if (state.audio.paused && 'mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'paused';
+        }
+    }, 250);
 }
 
 function reviveMediaSession() {
