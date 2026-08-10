@@ -157,3 +157,44 @@ def test_stats_report_attribution_coverage():
     assert stats["speech"] == 2
     assert stats["attributed"] == 1
     assert stats["attribution_rate"] == 0.5
+
+
+# ----- ellipses and stray punctuation -----
+# A chunk with nothing speakable in it made Chatterbox hallucinate noise: the
+# model is handed an utterance with no words and invents something.
+
+def test_ellipsis_does_not_split_into_lone_periods():
+    chunks = vs.split_sentences("He hesitated... then went on.")
+    assert all(vs.has_speakable_content(c) for c in chunks)
+
+
+def test_spaced_ellipsis_does_not_split_either():
+    """'. . .' is one piece of punctuation, not three sentence endings."""
+    chunks = vs.split_sentences("He hesitated . . . then went on.")
+    assert all(vs.has_speakable_content(c) for c in chunks)
+    assert not any(c.strip() == "." for c in chunks)
+
+
+def test_long_run_of_dots_is_absorbed():
+    chunks = vs.split_sentences("Wait..... what happened?")
+    assert all(vs.has_speakable_content(c) for c in chunks)
+
+
+def test_unicode_ellipsis_handled():
+    chunks = vs.split_sentences("He paused… then spoke.")
+    assert all(vs.has_speakable_content(c) for c in chunks)
+
+
+def test_initials_do_not_end_a_sentence():
+    """'H.' is an initial; splitting there yields a chunk read as one letter."""
+    chunks = vs.split_sentences("It was written by J. R. Smith last year.")
+    assert len(chunks) == 1
+
+
+def test_stray_punctuation_joins_the_previous_sentence():
+    chunks = vs.split_sentences("A real sentence. ! ?")
+    assert all(vs.has_speakable_content(c) for c in chunks)
+
+
+def test_no_speakable_content_yields_no_chunks():
+    assert vs.split_sentences("... . !") == []

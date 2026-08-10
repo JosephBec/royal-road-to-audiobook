@@ -57,15 +57,43 @@ def text_hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
 
 
+# "..." and ". . ." are one piece of punctuation, not three sentence endings.
+# Splitting inside them produced chunks that were a lone full stop, which a
+# TTS model has nothing to say for — Chatterbox answered with hallucinated
+# noise. Collapse them to a single ellipsis the splitter won't break apart.
+_ELLIPSIS = re.compile(r"\.\s*\.\s*\.[\s.]*|…")
+# "H." or "J." is an initial, not the end of a sentence.
+_INITIAL = re.compile(r"\b[A-Z]\.$")
+
+
+def has_speakable_content(text: str) -> bool:
+    """True if there is anything here a voice could actually say."""
+    return bool(re.search(r"[A-Za-z0-9]", text))
+
+
+def normalize_for_speech(text: str) -> str:
+    return _ELLIPSIS.sub("… ", text)
+
+
 def split_sentences(text: str) -> list[str]:
     """Sentence split matching how synthesis chunks text, so span index N is
     synthesis chunk N and a voice can be chosen per chunk."""
-    out = []
-    for para in (p.strip() for p in re.split(r"\n\s*\n|\n", text) if p.strip()):
+    out: list[str] = []
+    for para in (p.strip() for p in re.split(r"\n\s*\n|\n", normalize_for_speech(text))
+                 if p.strip()):
         for sentence in _SENTENCE.split(para):
             sentence = sentence.strip()
-            if sentence:
+            if not sentence:
+                continue
+            # Anything with no letters or digits — stray punctuation left by an
+            # unusual construction — belongs to the sentence before it rather
+            # than being spoken on its own.
+            if out and (not has_speakable_content(sentence) or _INITIAL.search(out[-1])):
+                out[-1] = f"{out[-1]} {sentence}".strip()
+            elif has_speakable_content(sentence):
                 out.append(sentence)
+            elif out:
+                out[-1] = f"{out[-1]} {sentence}".strip()
     return out
 
 

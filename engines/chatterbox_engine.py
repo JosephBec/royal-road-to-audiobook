@@ -57,20 +57,24 @@ def _split_chunks(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     An over-long sentence is still broken on commas rather than truncated,
     because Turbo's tokenizer silently drops anything past its window.
     """
+    import voice_script
+
     chunks: list[str] = []
-    for para in (p.strip() for p in re.split(r"\n\s*\n|\n", text) if p.strip()):
-        for sentence in re.split(r"(?<=[.!?\"'”])\s+", para):
-            sentence = sentence.strip()
-            while len(sentence) > max_chars:
-                cut = max(sentence.rfind(", ", 0, max_chars),
-                          sentence.rfind(" ", 0, max_chars))
-                if cut <= 0:
-                    cut = max_chars
-                head, sentence = sentence[:cut].strip(), sentence[cut:].strip()
-                if head:
-                    chunks.append(head)
-            if sentence:
-                chunks.append(sentence)
+    # One splitter, shared with voice scripts: span index N must be chunk N or
+    # per-character voices land on the wrong lines. It also normalises
+    # ellipses and never emits a chunk with nothing speakable in it — a lone
+    # full stop made the model hallucinate noise.
+    for sentence in voice_script.split_sentences(text):
+        while len(sentence) > max_chars:
+            cut = max(sentence.rfind(", ", 0, max_chars),
+                      sentence.rfind(" ", 0, max_chars))
+            if cut <= 0:
+                cut = max_chars
+            head, sentence = sentence[:cut].strip(), sentence[cut:].strip()
+            if head and voice_script.has_speakable_content(head):
+                chunks.append(head)
+        if sentence and voice_script.has_speakable_content(sentence):
+            chunks.append(sentence)
     return chunks
 
 
