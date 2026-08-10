@@ -1792,12 +1792,46 @@ async function toggleArchive() {
 
 let pronPreviewAudio = null;
 
+// Chapter range pickers. The export modal and the pronunciation scan both ask
+// for "from chapter X to chapter Y", and a number box means knowing the order
+// number of the chapter you want — which is the thing you opened the panel to
+// find out. One list, one behaviour, both places.
+//
+// defaultSpan is how many chapters to preselect; null means all of them.
+function populateChapterRange(startId, endId, novel, defaultSpan, onReady) {
+    const startSel = document.getElementById(startId);
+    const endSel = document.getElementById(endId);
+    startSel.innerHTML = endSel.innerHTML = '<option value="">Loading chapters…</option>';
+    startSel.disabled = endSel.disabled = true;
+    return api('GET', `/api/novels/${novel.id}/chapters?page=1&per_page=10000`)
+        .then(data => {
+            if (state.currentNovel?.id !== novel.id) return;   // modal context changed
+            const chs = (data.chapters || []).slice().sort((a, b) => a.order - b.order);
+            if (!chs.length) {
+                startSel.innerHTML = endSel.innerHTML =
+                    '<option value="">No chapters yet</option>';
+                return;
+            }
+            const opts = chs.map(c =>
+                `<option value="${c.order}">${c.order}. ${escapeHtml(c.title)}</option>`).join('');
+            startSel.innerHTML = opts;
+            endSel.innerHTML = opts;
+            startSel.value = String(chs[0].order);
+            const lastIndex = defaultSpan
+                ? Math.min(defaultSpan, chs.length) - 1
+                : chs.length - 1;
+            endSel.value = String(chs[lastIndex].order);
+            startSel.disabled = endSel.disabled = false;
+            if (onReady) onReady();
+        })
+        .catch(e => showToast('Failed to load chapters: ' + e.message, 5000));
+}
+
 function openPronunciation() {
     const novel = state.currentNovel;
     if (!novel) return;
     document.getElementById('pron-novel-name').textContent = novel.title;
-    document.getElementById('pron-start').value = 1;
-    document.getElementById('pron-end').value = Math.min(novel.total_chapters || 1, 10);
+    populateChapterRange('pron-start', 'pron-end', novel, 10);
     document.getElementById('pron-results').innerHTML = '';
     document.getElementById('rule-preview-out').innerHTML = '';
     switchPronTab('scan');
@@ -1821,6 +1855,54 @@ function switchPronTab(name) {
 
 function stopPronPreview() {
     if (pronPreviewAudio) { pronPreviewAudio.pause(); pronPreviewAudio = null; }
+}
+
+const DEMO_MAX_CHARS = 180;
+
+function wordPattern(word) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('\\b' + escaped + '\\b', 'gi');
+}
+
+// Demo a word inside a sentence, never on its own.
+//
+// Chatterbox is autoregressive with no phoneme input, and on a bare one-word
+// prompt it has almost nothing to predict a stop from. Measured over five
+// renders of "Aether" alone: it spoke the word twice in two of them, and
+// produced a different reading every single time ("Acer", "A-sar", "Asa.
+// Asa.", "Ah, sir. Ha!"). The same word in a sentence doubled in none of five
+// and read consistently. So the doubling and the noise on the end were the
+// demo's fault, not the spelling's.
+//
+// The scan already knows a real sentence containing the word, which is also
+// the honest test: it is how the line will actually be narrated.
+function pronDemoPhrase(word, example, replacement) {
+    const spoken = replacement || word;
+    let sentence = (example || '').trim();
+    if (!sentence || !wordPattern(word).test(sentence)) {
+        sentence = 'The word is ' + spoken + '.';
+    } else if (replacement) {
+        sentence = sentence.replace(wordPattern(word), replacement);
+    }
+    // With no respelling the sentence is already the word as written. Rewriting
+    // it with the scan's capitalisation would turn a mid-sentence "aether" into
+    // "Aether", which reads as a proper noun — the A side of the comparison has
+    // to be untouched or it is not a comparison.
+    if (sentence.length > DEMO_MAX_CHARS) {
+        // Keep the window around the word rather than the start of the line,
+        // and cut on spaces so no word is sliced in half.
+        const at = sentence.search(wordPattern(spoken));
+        const from = Math.max(0, at - Math.floor(DEMO_MAX_CHARS / 2));
+        let clip = sentence.slice(from, from + DEMO_MAX_CHARS);
+        if (from > 0) clip = clip.slice(clip.indexOf(' ') + 1);
+        const lastSpace = clip.lastIndexOf(' ');
+        if (lastSpace > 0 && from + DEMO_MAX_CHARS < sentence.length) {
+            clip = clip.slice(0, lastSpace);
+        }
+        sentence = clip.trim();
+        if (!/[.!?]$/.test(sentence)) sentence += '.';
+    }
+    return sentence;
 }
 
 // Hear a word as written, or as a respelling would make it. This is the only
@@ -1885,7 +1967,10 @@ function renderPronResults(words) {
             + '<div class="pron-example">' + escapeHtml(w.example || '') + '</div>'
             + '<div class="pron-actions">'
             + '<button class="secondary-btn btn-small pron-hear">&#9654; as written</button>'
-            + '<input type="text" class="pron-respell" placeholder="respelling, e.g. Kai-LIN-theer">'
+            // Plain letters, not the KAI-lin-theer convention. Chatterbox has
+            // no phoneme input, so it reads a capitalised hyphenated respelling
+            // as letters — "AY-thur" comes out "AYHA".
+            + '<input type="text" class="pron-respell" placeholder="respelling, e.g. kaylintheer">'
             + '<button class="secondary-btn btn-small pron-hear">&#9654; respelling</button>'
             + '<button class="secondary-btn btn-small pron-save">Save</button>'
             + '</div></div>';
@@ -1894,13 +1979,14 @@ function renderPronResults(words) {
     el.querySelectorAll('.pron-row').forEach(function (row) {
         const word = row.dataset.word;
         const input = row.querySelector('.pron-respell');
+        const example = row.querySelector('.pron-example')?.textContent || '';
         row.querySelectorAll('.pron-hear')[0].addEventListener('click', function (e) {
-            speakPhrase(word, e.currentTarget);
+            speakPhrase(pronDemoPhrase(word, example, null), e.currentTarget);
         });
         row.querySelectorAll('.pron-hear')[1].addEventListener('click', function (e) {
             const value = input.value.trim();
             if (!value) { showToast('Type a respelling first'); return; }
-            speakPhrase(value, e.currentTarget);
+            speakPhrase(pronDemoPhrase(word, example, value), e.currentTarget);
         });
         row.querySelector('.pron-save').addEventListener('click', async function () {
             const value = input.value.trim();
@@ -2265,23 +2351,8 @@ function openExportModal() {
         showToast('Set your audiobook folder in Settings first', 5000);
         return;
     }
-    const startSel = document.getElementById('export-start');
-    const endSel = document.getElementById('export-end');
-    startSel.innerHTML = endSel.innerHTML = '<option value="">Loading chapters…</option>';
-    startSel.disabled = endSel.disabled = true;
-    api('GET', `/api/novels/${novel.id}/chapters?page=1&per_page=10000`).then(data => {
-        if (state.currentNovel?.id !== novel.id) return; // modal context changed
-        const chs = (data.chapters || []).slice().sort((a, b) => a.order - b.order);
-        if (!chs.length) return;
-        const opts = chs.map(c =>
-            `<option value="${c.order}">${c.order}. ${escapeHtml(c.title)}</option>`).join('');
-        startSel.innerHTML = opts;
-        endSel.innerHTML = opts;
-        startSel.value = String(chs[0].order);
-        endSel.value = String(chs[chs.length - 1].order);
-        startSel.disabled = endSel.disabled = false;
-        updateExportNamePreview();
-    }).catch(e => showToast('Failed to load chapters: ' + e.message, 5000));
+    populateChapterRange('export-start', 'export-end', novel, null,
+                         updateExportNamePreview);
     const eff = novel.effective_settings || {};
     const voiceSel = document.getElementById('export-voice');
     voiceSel.innerHTML = voicesForEngine(eff.engine || state.settings.engine).map(v =>

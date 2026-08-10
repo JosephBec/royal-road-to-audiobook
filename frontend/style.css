@@ -1025,7 +1025,15 @@ a:hover { color: var(--accent-hover); }
     outline: none;
 }
 .modal-content input[type="number"]:focus { border-color: var(--accent); }
-.pron-range input { width: 5.5em; }
+/* The range pickers hold "412. The Long Road Down", not a 3-digit number, so
+   they need room — but a chapter title can be any length and must never push
+   the row off screen. Grow to share the space, truncate rather than overflow. */
+.pron-range select {
+    flex: 1 1 10em;
+    min-width: 0;
+    max-width: 22em;
+    text-overflow: ellipsis;
+}
 
 .pron-row {
     padding: 10px 0;
@@ -1281,7 +1289,11 @@ a:hover { color: var(--accent-hover); }
        every row stack. */
     .modal-wide { width: 96vw; max-height: 92vh; padding: 18px; }
     .pron-range { width: 100%; }
-    .pron-range input { flex: 1 1 auto; width: auto; min-width: 0; }
+    /* One picker per line on a phone: two dropdowns holding chapter titles
+       cannot share ~360px without both becoming unreadable. */
+    .pron-range select { flex: 1 1 100%; max-width: none; }
+    .pron-range > span { display: none; }   /* the "to" label, now redundant */
+    .pron-range .btn-small { flex: 1 1 100%; }
     .pron-actions { gap: 8px; }
     .pron-respell {
         flex: 1 1 100%;
