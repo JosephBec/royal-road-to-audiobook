@@ -979,29 +979,66 @@ a:hover { color: var(--accent-hover); }
 }
 .library-error p { margin-bottom: 12px; }
 
-/* Pronunciation scan + text rules */
-.modal-wide { max-width: 760px; width: 92vw; }
+/* Pronunciation scan + text rules.
+   Everything here holds user-supplied content of unpredictable length —
+   invented names, regular expressions, example sentences — so nothing may
+   assume it fits on one line. */
+.modal-wide {
+    max-width: 760px;
+    width: 92vw;
+    /* A scan can return a hundred rows; the panel scrolls rather than
+       growing past the viewport and stranding the Close button. */
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+}
+.modal-wide > .settings-panel {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+}
 .pron-subhead { margin: 18px 0 6px; font-size: 0.95rem; }
-.pron-range { display: inline-flex; align-items: center; gap: 6px; }
+.pron-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Only input[type="text"] was styled, so the chapter-range number fields
+   rendered as unstyled browser defaults — visibly wrong next to everything
+   else, and awkwardly sized on a phone. */
+.modal-content input[type="number"] {
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    outline: none;
+}
+.modal-content input[type="number"]:focus { border-color: var(--accent); }
 .pron-range input { width: 5.5em; }
 
 .pron-row {
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
 }
-.pron-word { display: flex; align-items: baseline; gap: 8px; }
+.pron-word { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.pron-word strong { overflow-wrap: anywhere; }
 .pron-count { color: var(--text-muted); font-size: 0.8rem; }
 .pron-example {
     color: var(--text-muted);
     font-size: 0.8rem;
     margin: 2px 0 6px;
-    /* One line: enough to tell a name from a typo, not enough to dominate */
+    /* Two lines of context, then clip. Enough to tell a name from a typo
+       without letting one long sentence dominate the row. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
 }
 .pron-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.pron-respell { flex: 1 1 190px; min-width: 140px; }
+/* width:auto overrides the modal's blanket input width:100%, which would
+   otherwise force this field onto its own line even on a wide screen. */
+.pron-respell { flex: 1 1 190px; min-width: 0; width: auto; }
 
 .rule-row {
     display: flex;
@@ -1020,15 +1057,24 @@ a:hover { color: var(--accent-hover); }
     text-transform: uppercase;
 }
 .rule-pattern, .rule-replacement {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 34%;
+    /* A regex has no spaces to break on, so it must be allowed to break
+       anywhere or it pushes the row off screen. */
+    overflow-wrap: anywhere;
+    min-width: 0;
+    flex: 1 1 30%;
 }
-.rule-arrow { color: var(--text-muted); }
-.rule-shared { color: var(--text-muted); font-size: 0.72rem; }
-.rule-row .rule-delete { margin-left: auto; }
-.rule-example { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 0.82rem; }
+.rule-arrow { color: var(--text-muted); flex: 0 0 auto; }
+.rule-shared { color: var(--text-muted); font-size: 0.72rem; flex: 0 0 auto; }
+.rule-row .rule-delete { margin-left: auto; flex: 0 0 auto; }
+.rule-example {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 3px 0;
+    font-size: 0.82rem;
+}
+.rule-example code { overflow-wrap: anywhere; min-width: 0; }
 
 /* Per-voice sentence pause stepper, inline on each Voices row */
 .voice-pause {
@@ -1216,4 +1262,39 @@ a:hover { color: var(--accent-hover); }
     #mini-player { padding: 6px 12px; }
     .player-controls { gap: 8px; }
     .chapter-row { padding: 10px 8px; gap: 8px; }
+
+    /* Speech panel on a phone. The desktop layout puts a play button, a text
+       field and two more buttons on one row, which cannot fit ~360px — it
+       overflowed instead of wrapping. Give the controls full width and let
+       every row stack. */
+    .modal-wide { width: 96vw; max-height: 92vh; padding: 18px; }
+    .pron-range { width: 100%; }
+    .pron-range input { flex: 1 1 auto; width: auto; min-width: 0; }
+    .pron-actions { gap: 8px; }
+    .pron-respell {
+        flex: 1 1 100%;
+        order: -1;          /* respelling field first: it is the thing you use */
+        width: 100%;
+    }
+    .pron-actions .small-btn,
+    .pron-actions .btn-small { flex: 1 1 auto; }
+    .pron-example { -webkit-line-clamp: 3; line-clamp: 3; }
+
+    /* A rule is pattern -> replacement; on a narrow screen that reads far
+       better stacked than squeezed onto one line. */
+    .rule-row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-template-areas:
+            "kind    pattern     delete"
+            "arrow   replacement replacement";
+        align-items: start;
+        gap: 4px 8px;
+    }
+    .rule-kind { grid-area: kind; }
+    .rule-pattern { grid-area: pattern; }
+    .rule-arrow { grid-area: arrow; }
+    .rule-replacement { grid-area: replacement; }
+    .rule-row .rule-delete { grid-area: delete; margin-left: 0; }
+    .rule-shared { display: none; }   /* the global list is grouped anyway */
 }
