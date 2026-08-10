@@ -17,7 +17,7 @@ def pf_env(tmp_path, monkeypatch):
 
     synth_calls = []
 
-    async def fake_synth(chapter_id, text, voice, speed):
+    async def fake_synth(chapter_id, text, voice, speed, engine_name=None):
         synth_calls.append(chapter_id)
         path = tts.temp_path_for_chapter(chapter_id)
         path.write_bytes(b"wav")

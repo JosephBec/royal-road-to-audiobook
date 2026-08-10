@@ -152,6 +152,32 @@ class ChapterScript(Base):
     chapter = relationship("Chapter")
 
 
+class TextRule(Base):
+    """A find-and-replace applied to chapter text before it is spoken.
+
+    Progression fiction is full of notation that reads fine on a page and
+    badly aloud: "Stealth V", or a skill name with an arrow between two
+    numbers. The arrow carries the meaning visually and vanishes entirely in
+    speech. Rules restore that meaning without editing the source text.
+
+    Scoped per novel because the vocabulary is: one book's "V" is a tier,
+    another's is a name. novel_id NULL means it applies everywhere.
+    """
+    __tablename__ = "text_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    novel_id = Column(Integer, ForeignKey("novels.id"), nullable=True)
+    kind = Column(String, nullable=False, default="regex")  # regex | roman
+    pattern = Column(Text, nullable=False)
+    replacement = Column(Text, nullable=False, default="")
+    note = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    novel = relationship("Novel")
+
+
 class Settings(Base):
     __tablename__ = "settings"
 

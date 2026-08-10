@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from database import SessionLocal, Chapter, retention_policy
 from scrapers import get_scraper_for_url
+import text_rules
 import tts
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,18 @@ async def _wait_for_interactive_idle():
         await asyncio.sleep(2)
 
 
+def _apply_rules(chapter_id: int, text: str) -> str:
+    """Rules are applied at render time, not scrape time, so changing one does
+    not require re-fetching and a bad rule can never corrupt the cached text."""
+    db = SessionLocal()
+    try:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        novel_id = chapter.novel_id if chapter else None
+        return text_rules.speech_text(db, novel_id, text)
+    finally:
+        db.close()
+
+
 async def _fetch_text(chapter_id: int, url: str) -> str | None:
     """Chapter body from the DB cache, else scrape once and store it.
 
@@ -133,7 +146,9 @@ async def _process_one(item: tuple):
         text = await _fetch_text(chapter_id, url)
         if text is None:
             return
-        await tts.synthesize_chapter_to_file(chapter_id, f"{title}\n\n{text}", voice, 1.0)
+        body = _apply_rules(chapter_id, text)
+        await tts.synthesize_chapter_to_file(
+            chapter_id, f"{title}\n\n{body}", voice, 1.0, engine)
         logger.info("Prefetched chapter %d — %s", chapter_id, title)
     except Exception:
         logger.exception("Prefetch failed for chapter %d (%s)", chapter_id, title)
@@ -188,8 +203,9 @@ async def head_start_pass():
             text = await _fetch_text(chapter_id, url)
             if text is None:
                 continue
+            body = _apply_rules(chapter_id, text)
             await tts.synthesize_chapter_streaming(
-                chapter_id, f"{title}\n\n{text}", voice, 1.0, engine_name,
+                chapter_id, f"{title}\n\n{body}", voice, 1.0, engine_name,
                 None, HEAD_START_SECONDS, yield_to_interactive=True)
         except Exception:
             logger.exception("Head start failed for chapter %d", chapter_id)

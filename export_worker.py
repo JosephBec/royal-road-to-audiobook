@@ -17,6 +17,7 @@ from pathlib import Path
 from database import SessionLocal, Chapter, Progress
 import library_sync
 import prefetch
+import text_rules
 import tts
 
 logger = logging.getLogger(__name__)

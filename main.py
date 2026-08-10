@@ -26,7 +26,8 @@ from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 from database import init_db, SessionLocal, retention_policy
-from routers import novels, chapters, progress, settings, exports, epubs, characters
+from routers import (novels, chapters, progress, settings, exports, epubs,
+                     characters, text_rules_api)
 from tts import cleanup_temp_files
 
 # Configure logging
@@ -121,6 +122,7 @@ app.include_router(settings.router)
 app.include_router(exports.router)
 app.include_router(epubs.router)
 app.include_router(characters.router)
+app.include_router(text_rules_api.router)
 
 # Serve frontend static files
 FRONTEND_DIR = Path(__file__).parent / "frontend"

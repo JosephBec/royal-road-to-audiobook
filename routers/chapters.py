@@ -20,6 +20,7 @@ from database import (
     effective_settings, retention_policy, SessionLocal,
 )
 import prefetch
+import text_rules
 from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
@@ -170,7 +171,8 @@ async def stream_chapter(chapter_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error("Failed to scrape chapter text: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
-    text = f"{chapter.title}\n\n{text}"
+    # Rewrite notation that reads well but speaks badly before synthesizing.
+    text = f"{chapter.title}\n\n{text_rules.speech_text(db, chapter.novel_id, text)}"
 
     # Synthesize full file then serve (speed=1.0, playback speed is client-side)
     with interactive_synthesis():
@@ -269,8 +271,9 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch chapter text: {e}")
-    # Announce the chapter title at the start of the audio
-    text = f"{chapter.title}\n\n{text}"
+    # Announce the chapter title, and rewrite notation that reads well but
+    # speaks badly (see text_rules) before anything is synthesized.
+    text = f"{chapter.title}\n\n{text_rules.speech_text(db, chapter.novel_id, text)}"
 
     # Per-character voices, if this novel is opted in and has a usable script.
     # None means render single-voice exactly as before.
