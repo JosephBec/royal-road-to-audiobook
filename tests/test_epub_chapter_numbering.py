@@ -220,3 +220,59 @@ def test_image_only_documents_yield_no_chapter(tmp_path):
     ])
     parsed = parse_epub_file(path)
     assert [c.number for c in parsed.chapters] == [1, 3]
+
+
+# ----- chapters separated by anchors inside one file -----
+
+def _epub_with_anchored_chapters(path):
+    """Two chapters sharing one document, split only by a #fragment.
+
+    Calibre-style EPUBs do this constantly — in one real book 31 of 40 TOC
+    entries were fragments. Ignoring the fragment hands the first chapter's
+    text to the second.
+    """
+    from ebooklib import epub as e
+    book = e.EpubBook()
+    book.set_identifier("anchored")
+    book.set_title("Anchored")
+    book.set_language("en")
+    doc = e.EpubHtml(title="Combined", file_name="combined.xhtml", lang="en")
+    doc.content = (
+        '<html><body>'
+        f'<h1 id="c1">1 First</h1><p>{LONG_PARA}</p><p>{LONG_PARA}</p>'
+        f'<h1 id="c2">2 Second</h1><p>{LONG_PARA}</p>'
+        '</body></html>'
+    )
+    book.add_item(doc)
+    book.toc = [e.Link("combined.xhtml#c1", "1 First", "c1"),
+                e.Link("combined.xhtml#c2", "2 Second", "c2")]
+    tail = e.EpubHtml(title="3 Third", file_name="third.xhtml", lang="en")
+    tail.content = f"<html><body><h1>3 Third</h1><p>{LONG_PARA}</p></body></html>"
+    book.add_item(tail)
+    book.toc = list(book.toc) + [e.Link("third.xhtml", "3 Third", "c3")]
+    book.add_item(e.EpubNcx())
+    book.add_item(e.EpubNav())
+    book.spine = ["nav", doc, tail]
+    e.write_epub(str(path), book)
+    return path
+
+
+def test_anchored_chapters_in_one_file_are_separated(tmp_path):
+    parsed = parse_epub_file(_epub_with_anchored_chapters(tmp_path / "a.epub"))
+    assert [c.number for c in parsed.chapters] == [1, 2, 3]
+
+
+def test_text_before_an_anchor_stays_with_the_earlier_chapter(tmp_path):
+    """The exact bug: chapter 1's body sat ahead of chapter 2's anchor and was
+    being attributed to chapter 2."""
+    parsed = parse_epub_file(_epub_with_anchored_chapters(tmp_path / "a.epub"))
+    first, second = parsed.chapters[0], parsed.chapters[1]
+    assert first.word_count > second.word_count, \
+        "chapter 1 has two paragraphs to chapter 2's one"
+
+
+def test_anchor_offset_finds_id_and_name():
+    from scrapers.epub_local import _anchor_offset
+    assert _anchor_offset('<p id="filepos99">x</p>', "filepos99") is not None
+    assert _anchor_offset("<a name='filepos99'>x</a>", "filepos99") is not None
+    assert _anchor_offset('<p id="other">x</p>', "filepos99") is None

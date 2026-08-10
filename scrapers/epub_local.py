@@ -279,6 +279,44 @@ def extract_cover_image(book: epub.EpubBook) -> tuple[bytes | None, str]:
     return None, "jpg"
 
 
+def _toc_entries(book: epub.EpubBook) -> list[tuple[str, str | None, str]]:
+    """(file, anchor, label) for every TOC entry, in reading order.
+
+    Unlike _toc_labels this keeps the "#fragment" and keeps duplicates per
+    file, because both matter: Calibre-style EPUBs routinely put several
+    chapters in one document and separate them only by anchor. In one real
+    book 31 of 40 entries were fragments, so treating a file as belonging to a
+    single chapter handed one chapter's text to the next.
+    """
+    entries: list[tuple[str, str | None, str]] = []
+
+    def walk(items):
+        for item in items:
+            if isinstance(item, (list, tuple)):
+                walk(item)
+            elif isinstance(item, epub.Section):
+                walk(getattr(item, "subitems", []) or [])
+            elif isinstance(item, epub.Link):
+                file, _, anchor = (item.href or "").partition("#")
+                title = (item.title or "").strip()
+                # A blank title says nothing about structure — keeping it would
+                # end the open chapter at a document that merely continues it.
+                if file and title:
+                    entries.append((file, anchor or None, title))
+
+    try:
+        walk(book.toc or [])
+    except Exception:
+        logger.exception("Could not read EPUB navigation")
+    return entries
+
+
+def _anchor_offset(raw_html: str, anchor: str) -> int | None:
+    """Character offset of an anchor in the raw markup, or None if absent."""
+    match = re.search(rf"""(?:id|name)\s*=\s*["']{re.escape(anchor)}["']""", raw_html)
+    return match.start() if match else None
+
+
 def _read_document(item) -> str | None:
     try:
         return item.get_content().decode("utf-8", errors="replace")
@@ -287,7 +325,7 @@ def _read_document(item) -> str | None:
         return None
 
 
-def _chapters_from_toc(documents, labels, min_chapter_words) -> list[ParsedChapter]:
+def _chapters_from_toc(documents, toc_entries, min_chapter_words) -> list[ParsedChapter]:
     """Build chapters using TOC entries as boundaries, not as filters.
 
     A numbered TOC entry starts a chapter; an unnumbered one (a part heading,
@@ -301,47 +339,62 @@ def _chapters_from_toc(documents, labels, min_chapter_words) -> list[ParsedChapt
     inclusion silently discarded every continuation page, losing nearly 40% of
     the text while still reporting a plausible chapter count.
     """
-    # Read every document once, tagged with its TOC label.
-    entries = []
-    for item in documents:
-        content = _read_document(item)
-        if content is None:
-            continue
-        label = _match_label(labels, item.get_name())
-        entries.append({
-            "content": content,
-            "text": clean_html_to_text(content),
-            "label": label,
-            "number": chapter_number_from_label(label) if label else None,
-        })
-
-    starts = [i for i, e in enumerate(entries) if e["number"] is not None]
-    if not starts:
-        return []
+    # Which TOC entries land in which file, keyed on basename: nav hrefs are
+    # relative to the nav document, item names to the OPF root.
+    by_file: dict[str, list[tuple[str | None, str]]] = {}
+    for file, anchor, label in toc_entries:
+        by_file.setdefault(file.rsplit("/", 1)[-1], []).append((anchor, label))
 
     chapters: list[ParsedChapter] = []
-    for position, start in enumerate(starts):
-        # A chapter owns every document up to the next numbered entry. Slicing
-        # positionally is what makes multi-document chapters work; testing each
-        # document for a label of its own discarded the continuations.
-        end = starts[position + 1] if position + 1 < len(starts) else len(entries)
-        if position + 1 == len(starts):
-            # Last chapter: stop at the first labelled entry after it, so
-            # endnotes and indexes don't get swallowed into the final chapter.
-            for i in range(start + 1, len(entries)):
-                if entries[i]["label"] is not None:
-                    end = i
-                    break
+    open_label: str | None = None
+    open_number: int | None = None
+    open_html: str = ""
+    parts: list[str] = []
 
-        body = "\n\n".join(e["text"] for e in entries[start:end] if e["text"])
-        if len(body.split()) < min_chapter_words:
+    def flush():
+        nonlocal open_label, open_number, open_html, parts
+        body = "\n\n".join(p for p in parts if p)
+        if open_number is not None and len(body.split()) >= min_chapter_words:
+            chapters.append(ParsedChapter(
+                title=extract_chapter_title(open_html, open_label),
+                text=body, index=len(chapters), number=open_number))
+        open_label, open_number, open_html, parts = None, None, "", []
+
+    for item in documents:
+        raw = _read_document(item)
+        if raw is None:
             continue
-        chapters.append(ParsedChapter(
-            title=extract_chapter_title(entries[start]["content"], entries[start]["label"]),
-            text=body,
-            index=len(chapters),
-            number=entries[start]["number"],
-        ))
+
+        # Cut points inside this document, in document order. An entry whose
+        # anchor is missing is ignored rather than guessed at.
+        cuts: list[tuple[int, str]] = []
+        for anchor, label in by_file.get(item.get_name().rsplit("/", 1)[-1], []):
+            offset = 0 if anchor is None else _anchor_offset(raw, anchor)
+            if offset is not None:
+                cuts.append((offset, label))
+        cuts.sort(key=lambda c: c[0])
+
+        # Text before the first cut still belongs to the previous chapter —
+        # this is the part that was being lost: a chapter's body sitting ahead
+        # of the *next* chapter's anchor in a shared file.
+        if not cuts:
+            if open_number is not None:
+                parts.append(clean_html_to_text(raw))
+            continue
+        if cuts[0][0] > 0 and open_number is not None:
+            parts.append(clean_html_to_text(raw[:cuts[0][0]]))
+
+        for position, (offset, label) in enumerate(cuts):
+            end = cuts[position + 1][0] if position + 1 < len(cuts) else len(raw)
+            fragment = raw[offset:end]
+            flush()
+            number = chapter_number_from_label(label)
+            if number is None:
+                continue  # front matter or a part heading: opens nothing
+            open_label, open_number, open_html = label, number, fragment
+            parts = [clean_html_to_text(fragment)]
+
+    flush()
     return chapters
 
 
@@ -399,16 +452,21 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
         documents = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
 
     labels = _toc_labels(book)
+    toc = _toc_entries(book)
     # Only trust the TOC when it actually numbers things. Plenty of EPUBs have
     # a navigation document full of unnumbered titles, and for those the old
     # word-count heuristic is still the best available signal.
+    #
+    # Counted over _toc_entries, not the deduped labels: when several chapters
+    # share one file they collapse to a single label, which undercounts and
+    # silently drops the whole book back to the heuristic path.
     numbered_labels = sum(
-        1 for label in labels.values() if chapter_number_from_label(label) is not None
+        1 for _f, _a, label in toc if chapter_number_from_label(label) is not None
     )
     use_toc = numbered_labels >= 3
 
     if use_toc:
-        parsed.chapters = _chapters_from_toc(documents, labels, min_chapter_words)
+        parsed.chapters = _chapters_from_toc(documents, toc, min_chapter_words)
     else:
         parsed.chapters = _chapters_from_word_count(documents, labels, min_chapter_words)
 
