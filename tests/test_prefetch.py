@@ -17,12 +17,19 @@ def pf_env(tmp_path, monkeypatch):
 
     synth_calls = []
 
-    async def fake_synth(chapter_id, text, voice, speed, engine_name=None):
+    async def fake_synth(chapter_id, text, voice, speed, engine_name=None,
+                         chunk_voices=None, max_seconds=None,
+                         yield_to_interactive=False):
         synth_calls.append(chapter_id)
-        path = tts.temp_path_for_chapter(chapter_id)
-        path.write_bytes(b"wav")
-        return path
-    monkeypatch.setattr(prefetch.tts, "synthesize_chapter_to_file", fake_synth)
+        # The real streaming path writes the full file once it finishes.
+        tts.temp_path_for_chapter(chapter_id).write_bytes(b"wav")
+    monkeypatch.setattr(prefetch.tts, "synthesize_chapter_streaming", fake_synth)
+
+    async def unexpected(*a, **k):
+        raise AssertionError(
+            "render-ahead must use the resumable streaming path, not "
+            "synthesize_chapter_to_file")
+    monkeypatch.setattr(prefetch.tts, "synthesize_chapter_to_file", unexpected)
 
     class FakeScraper:
         async def scrape_chapter_text(self, url):
@@ -112,6 +119,37 @@ def test_head_start_runs_before_render_ahead(pf_env, monkeypatch):
     asyncio.run(prefetch.drain_once())
 
     assert order == ["head-start", "full-render:1", "full-render:2", "full-render:3"]
+
+
+def test_render_ahead_uses_the_resumable_path(pf_env):
+    """Render-ahead is the work most likely to be interrupted.
+
+    It runs unattended for hours, and synthesize_chapter_to_file renders a
+    whole chapter into memory before writing anything — twenty minutes of GPU
+    that a restart discards entirely, leaving the next attempt to start from
+    zero. The streaming path writes each segment as it goes and records a
+    fingerprint, so an interruption costs one chunk instead of a chapter.
+    """
+    prefetch, tts, synth_calls, _, _ = pf_env
+    resumable_args = {}
+
+    async def capture(chapter_id, text, voice, speed, engine_name=None,
+                      chunk_voices=None, max_seconds=None,
+                      yield_to_interactive=False):
+        synth_calls.append(chapter_id)
+        resumable_args.update(max_seconds=max_seconds,
+                              yield_to_interactive=yield_to_interactive)
+        tts.temp_path_for_chapter(chapter_id).write_bytes(b"wav")
+    prefetch.tts.synthesize_chapter_streaming = capture
+
+    prefetch.enqueue(_targets(1), "af_heart")
+    asyncio.run(prefetch.drain_once())
+
+    assert synth_calls == [1]
+    # No cap: render-ahead wants the whole chapter, unlike the head start.
+    assert resumable_args["max_seconds"] is None
+    # And it must step aside for anything the listener is waiting on.
+    assert resumable_args["yield_to_interactive"] is True
 
 
 def test_head_start_is_skipped_when_nothing_is_queued(pf_env, monkeypatch):

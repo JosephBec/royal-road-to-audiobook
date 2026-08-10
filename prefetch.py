@@ -147,8 +147,20 @@ async def _process_one(item: tuple):
         if text is None:
             return
         body = _apply_rules(chapter_id, text)
-        await tts.synthesize_chapter_to_file(
-            chapter_id, f"{title}\n\n{body}", voice, 1.0, engine)
+        # Stream rather than synthesize_chapter_to_file, which renders the
+        # whole chapter into memory and writes once at the end. That is twenty
+        # minutes of GPU with nothing on disk until the final instant, so a
+        # restart — or a crash, or a power cut — loses all of it, and the next
+        # attempt starts from zero. Render-ahead is exactly the work most
+        # likely to be interrupted, since it runs unattended for hours.
+        #
+        # The streaming path writes each segment as it is produced and records
+        # a fingerprint, so an interrupted render resumes where it stopped and
+        # the segments already written stay playable. It finishes by writing
+        # the same complete WAV, so nothing downstream can tell the difference.
+        await tts.synthesize_chapter_streaming(
+            chapter_id, f"{title}\n\n{body}", voice, 1.0, engine,
+            None, None, yield_to_interactive=True)
         logger.info("Prefetched chapter %d — %s", chapter_id, title)
     except Exception:
         logger.exception("Prefetch failed for chapter %d (%s)", chapter_id, title)
