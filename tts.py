@@ -26,6 +26,7 @@ import numpy as np
 import soundfile as sf
 
 import engines
+import voice_script
 
 logger = logging.getLogger(__name__)
 
@@ -106,17 +107,24 @@ def segment_gap_for(engine_name: str | None, voice: str) -> float:
 
 
 def _segments_to_wav_bytes(segments: list[np.ndarray], sample_rate: int = SAMPLE_RATE,
-                           gap_seconds: float = SEGMENT_GAP_SECONDS) -> bytes:
-    """Concatenate audio segments into a single WAV file in memory."""
+                           gap_seconds: float | list[float] = SEGMENT_GAP_SECONDS) -> bytes:
+    """Concatenate audio segments into a single WAV file in memory.
+
+    `gap_seconds` may be one value or one per segment. Per-segment is what
+    lets an ellipsis hold a longer beat than a full stop while everything
+    else keeps the voice's normal sentence pause.
+    """
     if not segments:
         return b""
 
-    silence = np.zeros(int(sample_rate * gap_seconds), dtype=np.float32)
+    gaps = (list(gap_seconds) if isinstance(gap_seconds, (list, tuple))
+            else [gap_seconds] * len(segments))
     parts = []
     for i, seg in enumerate(segments):
         parts.append(seg)
         if i < len(segments) - 1:
-            parts.append(silence)
+            width = gaps[i] if i < len(gaps) else SEGMENT_GAP_SECONDS
+            parts.append(np.zeros(int(sample_rate * width), dtype=np.float32))
 
     audio = np.concatenate(parts)
     buf = io.BytesIO()
@@ -411,6 +419,23 @@ def discard_segments_from(chapter_id: int, start_index: int):
         index += 1
 
 
+def _recorded_gap(chapter_id: int, index: int, fallback: float) -> float:
+    """The gap a already-rendered segment was encoded with.
+
+    Recovered from its recorded duration minus the audio's own length, so a
+    resumed render rebuilds the full file with the same spacing it streamed
+    with — otherwise an ellipsis pause would differ between the two timelines.
+    """
+    durations = _read_sidecar(chapter_id).get("durations") or []
+    if index < len(durations) and durations[index] is not None:
+        try:
+            speech = sf.info(str(_segment_path(chapter_id, index))).duration
+            return max(0.0, float(durations[index]) - speech)
+        except Exception:
+            pass
+    return fallback
+
+
 def _encode_segment_aac(chapter_id: int, index: int,
                         gap_seconds: float = SEGMENT_GAP_SECONDS,
                         fingerprint: dict | None = None) -> bool:
@@ -529,6 +554,7 @@ async def _synthesize_chapter_streaming(
     discard_segments_from(chapter_id, resume_from)
 
     all_segments: list[np.ndarray] = []
+    segment_gaps: list[float] = []
     resumed_duration = 0.0
     for index in range(resume_from):
         try:
@@ -540,6 +566,7 @@ async def _synthesize_chapter_streaming(
             resume_from = index
             break
         all_segments.append(audio)
+        segment_gaps.append(_recorded_gap(chapter_id, index, gap))
         resumed_duration += len(audio) / engine.sample_rate
     if resume_from:
         logger.info("Chapter %d resuming at chunk %d/%d (%.0fs already rendered)",
@@ -572,11 +599,18 @@ async def _synthesize_chapter_streaming(
             chunk_voice = voice
             if chunk_voices and chunk_number < len(chunk_voices):
                 chunk_voice = chunk_voices[chunk_number] or voice
-            for audio in await loop.run_in_executor(
-                    _executor, _render_chunk, chunks[chunk_number], chunk_voice):
+            # An ellipsis gets a longer pause after it than a full stop does.
+            chunk_gap = gap * voice_script.gap_multiplier(chunks[chunk_number])
+            produced = await loop.run_in_executor(
+                _executor, _render_chunk, chunks[chunk_number], chunk_voice)
+            for position, audio in enumerate(produced):
+                # Only the chunk's final segment carries its gap; any earlier
+                # ones are mid-chunk and keep the ordinary pause.
+                this_gap = chunk_gap if position == len(produced) - 1 else gap
                 all_segments.append(audio)
+                segment_gaps.append(this_gap)
                 dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
-                _encode_segment_aac(chapter_id, seg_index, gap, fingerprint)
+                _encode_segment_aac(chapter_id, seg_index, this_gap, fingerprint)
                 st = _streaming_state.get(chapter_id)
                 if st is not None:
                     st["segments"].append(dur)
@@ -595,7 +629,7 @@ async def _synthesize_chapter_streaming(
 
     # Save complete concatenated file
     if all_segments:
-        wav_bytes = _segments_to_wav_bytes(all_segments, engine.sample_rate, gap)
+        wav_bytes = _segments_to_wav_bytes(all_segments, engine.sample_rate, segment_gaps)
         temp_path_for_chapter(chapter_id).write_bytes(wav_bytes)
 
     st = _streaming_state.get(chapter_id)

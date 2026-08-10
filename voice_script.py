@@ -31,7 +31,10 @@ OPEN_QUOTES = "“‟«\""
 CLOSE_QUOTES = "”‟»\""
 _QUOTED = re.compile(f"[{re.escape(OPEN_QUOTES)}][^{re.escape(CLOSE_QUOTES)}]{{2,}}"
                      f"[{re.escape(CLOSE_QUOTES)}]")
-_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+# An ellipsis ends a chunk too, so the pause after it can be lengthened
+# independently. It stays attached to the text before it, which is what marks
+# the chunk as wanting the longer beat.
+_SENTENCE = re.compile(r"(?<=[.!?…])\s+")
 
 SPEECH_VERBS = (
     "said|asked|replied|answered|muttered|whispered|shouted|yelled|called|"
@@ -65,6 +68,17 @@ _ELLIPSIS = re.compile(r"\.\s*\.\s*\.[\s.]*|…")
 # "H." or "J." is an initial, not the end of a sentence.
 _INITIAL = re.compile(r"\b[A-Z]\.$")
 
+ELLIPSIS = "…"
+# An ellipsis is a longer beat than a full stop — that is the point of it.
+# Three dots, three times the pause. Applied to the gap that follows the
+# chunk, so it scales with whatever the voice's sentence pause is set to.
+ELLIPSIS_GAP_MULTIPLIER = 3.0
+
+
+def gap_multiplier(chunk: str) -> float:
+    """How much longer than a normal sentence pause this chunk's gap should be."""
+    return ELLIPSIS_GAP_MULTIPLIER if chunk.rstrip().endswith(ELLIPSIS) else 1.0
+
 
 def has_speakable_content(text: str) -> bool:
     """True if there is anything here a voice could actually say."""
@@ -72,7 +86,7 @@ def has_speakable_content(text: str) -> bool:
 
 
 def normalize_for_speech(text: str) -> str:
-    return _ELLIPSIS.sub("… ", text)
+    return _ELLIPSIS.sub(f"{ELLIPSIS} ", text)
 
 
 def split_sentences(text: str) -> list[str]:

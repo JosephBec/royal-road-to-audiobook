@@ -198,3 +198,24 @@ def test_stray_punctuation_joins_the_previous_sentence():
 
 def test_no_speakable_content_yields_no_chunks():
     assert vs.split_sentences("... . !") == []
+
+
+def test_ellipsis_ends_its_chunk():
+    """It must be a chunk boundary so the pause after it can be lengthened."""
+    chunks = vs.split_sentences("He stopped… and waited for an answer.")
+    assert len(chunks) == 2
+    assert chunks[0].rstrip().endswith(vs.ELLIPSIS)
+
+
+def test_ellipsis_chunk_asks_for_a_longer_pause():
+    assert vs.gap_multiplier("He stopped…") == vs.ELLIPSIS_GAP_MULTIPLIER
+    assert vs.gap_multiplier("He stopped.") == 1.0
+
+
+def test_three_dots_get_the_same_treatment_as_the_character():
+    chunks = vs.split_sentences("He stopped... and waited.")
+    assert vs.gap_multiplier(chunks[0]) == vs.ELLIPSIS_GAP_MULTIPLIER
+
+
+def test_trailing_whitespace_does_not_hide_an_ellipsis():
+    assert vs.gap_multiplier("He stopped…  ") == vs.ELLIPSIS_GAP_MULTIPLIER

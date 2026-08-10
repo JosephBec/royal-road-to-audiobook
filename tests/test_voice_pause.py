@@ -119,3 +119,24 @@ def test_segment_gap_for_routes_to_the_engine(voices_dir):
     engines.get_engine("chatterbox").set_voice_settings("cb_builtin", sentence_pause=0.95)
     assert tts.segment_gap_for("chatterbox", "cb_builtin") == pytest.approx(0.95)
     assert tts.segment_gap_for("kokoro", "af_heart") == pytest.approx(0.3)
+
+
+# ----- per-segment gaps -----
+
+def test_gaps_may_differ_per_segment():
+    """An ellipsis holds a longer beat than a full stop in the same chapter."""
+    import io, soundfile as sf
+    segs = [np.ones(2400, dtype=np.float32) for _ in range(3)]
+    uniform = tts._segments_to_wav_bytes(segs, 24000, 0.7)
+    varied = tts._segments_to_wav_bytes(segs, 24000, [2.1, 0.7, 0.7])
+    d_uniform = sf.info(io.BytesIO(uniform)).duration
+    d_varied = sf.info(io.BytesIO(varied)).duration
+    # First gap widened 0.7 -> 2.1
+    assert d_varied - d_uniform == pytest.approx(1.4, abs=0.01)
+
+
+def test_a_single_gap_value_still_works():
+    import io, soundfile as sf
+    segs = [np.ones(24000, dtype=np.float32) for _ in range(2)]
+    info = sf.info(io.BytesIO(tts._segments_to_wav_bytes(segs, 24000, 0.5)))
+    assert info.duration == pytest.approx(2.5, abs=0.01)
