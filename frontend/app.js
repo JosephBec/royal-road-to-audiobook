@@ -7,6 +7,7 @@
 // ===== State =====
 const state = {
     novels: [],
+    libraryLoaded: false,
     currentNovel: null,
     // Library organization
     libraryTab: location.hash === '#favorites' ? 'favorites' : 'all',
@@ -73,12 +74,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyLibraryView();
 
     await bootStep('settings', loadSettings);
-    applyTheme(state.settings.theme);
-    applyPlaybackRate();
-
+    await bootStep('theme', () => applyTheme(state.settings.theme));
+    await bootStep('playback rate', () => applyPlaybackRate());
     await bootStep('voices', loadVoices);
     await bootStep('library', loadLibrary);
-    await bootStep('exports', async () => startExportsPolling());
+    await bootStep('exports', () => startExportsPolling());
 });
 
 window.addEventListener('hashchange', () => {
@@ -165,6 +165,7 @@ async function watchFavoritesSync() {
 async function loadLibrary() {
     try {
         state.novels = await api('GET', '/api/novels');
+        state.libraryLoaded = true;
         renderLibrary();
     } catch (e) {
         console.error('Failed to load library:', e);
@@ -295,6 +296,14 @@ function renderLibrary() {
     const grid = document.getElementById('novel-grid');
     const empty = document.getElementById('library-empty');
     const novels = sortedNovels();
+
+    if (novels.length === 0 && !state.libraryLoaded) {
+        // Nothing fetched yet: say nothing rather than claiming the library
+        // is empty, which is a different and alarming statement.
+        grid.innerHTML = '';
+        empty.style.display = 'none';
+        return;
+    }
 
     if (novels.length === 0) {
         grid.innerHTML = '';
@@ -1875,9 +1884,9 @@ function renderPronResults(words) {
             + '<span class="pron-count">x' + w.count + '</span></div>'
             + '<div class="pron-example">' + escapeHtml(w.example || '') + '</div>'
             + '<div class="pron-actions">'
-            + '<button class="small-btn pron-hear-old">&#9654; as written</button>'
+            + '<button class="secondary-btn btn-small pron-hear">&#9654; as written</button>'
             + '<input type="text" class="pron-respell" placeholder="respelling, e.g. Kai-LIN-theer">'
-            + '<button class="small-btn pron-hear-new">&#9654; respelling</button>'
+            + '<button class="secondary-btn btn-small pron-hear">&#9654; respelling</button>'
             + '<button class="secondary-btn btn-small pron-save">Save</button>'
             + '</div></div>';
     }).join('');
@@ -1885,10 +1894,10 @@ function renderPronResults(words) {
     el.querySelectorAll('.pron-row').forEach(function (row) {
         const word = row.dataset.word;
         const input = row.querySelector('.pron-respell');
-        row.querySelector('.pron-hear-old').addEventListener('click', function (e) {
+        row.querySelectorAll('.pron-hear')[0].addEventListener('click', function (e) {
             speakPhrase(word, e.currentTarget);
         });
-        row.querySelector('.pron-hear-new').addEventListener('click', function (e) {
+        row.querySelectorAll('.pron-hear')[1].addEventListener('click', function (e) {
             const value = input.value.trim();
             if (!value) { showToast('Type a respelling first'); return; }
             speakPhrase(value, e.currentTarget);

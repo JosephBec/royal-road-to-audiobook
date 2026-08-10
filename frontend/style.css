@@ -979,6 +979,18 @@ a:hover { color: var(--accent-hover); }
 }
 .library-error p { margin-bottom: 12px; }
 
+/* Text buttons in the scan rows. They were using .small-btn, which is a
+   32px circle meant for a single glyph; with a word inside they stretched
+   into long ellipses. */
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    border-radius: var(--radius-sm);
+    width: auto;
+    height: auto;
+    white-space: nowrap;
+}
+
 /* Pronunciation scan + text rules.
    Everything here holds user-supplied content of unpredictable length —
    invented names, regular expressions, example sentences — so nothing may
@@ -1276,7 +1288,6 @@ a:hover { color: var(--accent-hover); }
         order: -1;          /* respelling field first: it is the thing you use */
         width: 100%;
     }
-    .pron-actions .small-btn,
     .pron-actions .btn-small { flex: 1 1 auto; }
     .pron-example { -webkit-line-clamp: 3; line-clamp: 3; }
 
