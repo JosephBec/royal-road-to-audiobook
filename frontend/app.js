@@ -41,6 +41,19 @@ const state = {
 };
 
 // ===== Init =====
+// Run a startup step without letting its failure take the rest down. The
+// boot sequence used to be a bare chain of awaits, so one slow or failed
+// request — the server is briefly busy right after a restart — meant
+// loadLibrary() and setupEventListeners() never ran and the page rendered as
+// a bare header until you reloaded.
+async function bootStep(label, fn) {
+    try {
+        await fn();
+    } catch (e) {
+        console.error(`Startup step "${label}" failed:`, e);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     // Kick the server-side favorites sync (new chapters + pre-downloads).
     // If it actually starts, watch for it to finish and re-render the
@@ -49,18 +62,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         .then(res => { if (res && res.started) watchFavoritesSync(); })
         .catch(() => {});
 
-    await loadSettings();
-    applyTheme(state.settings.theme);
-    await loadVoices();
-    await loadLibrary();
+    // Wire the interface up first. Buttons that do nothing are worse than
+    // buttons with no data behind them yet, and this cannot fail on a
+    // network hiccup.
     setupEventListeners();
     setupAudioEvents();
-    applyPlaybackRate();
     updateAddNovelVisibility();
     applyLibraryTab();
     document.getElementById('library-sort').value = state.librarySort;
     applyLibraryView();
-    startExportsPolling(); // stops itself when no jobs are active
+
+    await bootStep('settings', loadSettings);
+    applyTheme(state.settings.theme);
+    applyPlaybackRate();
+
+    await bootStep('voices', loadVoices);
+    await bootStep('library', loadLibrary);
+    await bootStep('exports', async () => startExportsPolling());
 });
 
 window.addEventListener('hashchange', () => {
@@ -150,6 +168,20 @@ async function loadLibrary() {
         renderLibrary();
     } catch (e) {
         console.error('Failed to load library:', e);
+        // Say so and offer a way out. Silence here looked like an empty
+        // library, which is indistinguishable from a broken one.
+        const grid = document.getElementById('novel-grid');
+        const empty = document.getElementById('library-empty');
+        if (empty) empty.style.display = 'none';
+        if (grid) {
+            grid.innerHTML =
+                '<div class="library-error">'
+                + '<p>Could not reach the server.</p>'
+                + '<button id="btn-library-retry" class="primary-btn">Try again</button>'
+                + '</div>';
+            const retry = document.getElementById('btn-library-retry');
+            if (retry) retry.addEventListener('click', () => loadLibrary());
+        }
     }
 }
 

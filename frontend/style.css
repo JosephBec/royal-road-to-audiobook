@@ -969,6 +969,16 @@ a:hover { color: var(--accent-hover); }
     .skeleton-bar { animation: none; }
 }
 
+/* Shown when the library can't be reached, instead of an empty grid that
+   looks identical to having no books. */
+.library-error {
+    grid-column: 1 / -1;
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-muted);
+}
+.library-error p { margin-bottom: 12px; }
+
 /* Pronunciation scan + text rules */
 .modal-wide { max-width: 760px; width: 92vw; }
 .pron-subhead { margin: 18px 0 6px; font-size: 0.95rem; }
