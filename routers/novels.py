@@ -31,6 +31,7 @@ class NovelSettingsRequest(BaseModel):
     auto_play: bool | None = None
     chapter_sort: str | None = None
     favorite: bool | None = None
+    archived: bool | None = None
 
 
 class OrderRequest(BaseModel):
@@ -52,6 +53,7 @@ class NovelResponse(BaseModel):
     progress_updated_at: str | None = None
     source: str | None = None
     favorite: bool = False
+    archived: bool = False
     sort_order: int | None = None
     settings: dict | None = None
     effective_settings: dict | None = None
@@ -66,6 +68,7 @@ def _novel_settings_payload(novel: Novel, db: Session) -> dict:
     return {
         "source": scraper.name if scraper else None,
         "favorite": bool(novel.favorite),
+        "archived": bool(novel.archived),
         "sort_order": novel.sort_order,
         "settings": {
             "engine": novel.engine,
@@ -224,6 +227,8 @@ async def update_novel_settings(
 
     if "favorite" in provided and req.favorite is None:
         raise HTTPException(status_code=400, detail="favorite must be true or false")
+    if "archived" in provided and req.archived is None:
+        raise HTTPException(status_code=400, detail="archived must be true or false")
 
     if "engine" in provided and req.engine is not None:
         import engines
@@ -232,7 +237,7 @@ async def update_novel_settings(
 
     voice_changed = "voice" in provided and req.voice != novel.voice
     engine_changed = "engine" in provided and req.engine != novel.engine
-    for field in ("engine", "voice", "speed", "auto_play", "chapter_sort", "favorite"):
+    for field in ("engine", "voice", "speed", "auto_play", "chapter_sort", "favorite", "archived"):
         if field in provided:
             setattr(novel, field, getattr(req, field))
     db.commit()

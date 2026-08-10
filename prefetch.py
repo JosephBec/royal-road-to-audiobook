@@ -142,6 +142,53 @@ async def _process_one(item: tuple):
         _pending.discard(chapter_id)
 
 
+# Enough audio to start listening while the rest of the chapter renders.
+# Chatterbox needs ~25-60s to load plus ~10s for a first chunk, which is the
+# worst moment in the whole experience; this pays that cost in advance.
+HEAD_START_SECONDS = 120
+
+
+async def head_start_pass():
+    """Render the opening of each active novel's current chapter.
+
+    Runs after the queue drains, so it never delays real prefetch. Archived
+    novels are skipped — the whole point of archiving is to stop spending GPU
+    time on books you aren't reading.
+    """
+    from database import Novel, Progress, Settings, effective_settings
+
+    db = SessionLocal()
+    try:
+        settings = db.query(Settings).first()
+        targets = []
+        for novel in db.query(Novel).filter(Novel.archived.is_(False)).all():
+            prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
+            if not prog or not prog.chapter_id:
+                continue
+            chapter = db.query(Chapter).filter(Chapter.id == prog.chapter_id).first()
+            if chapter is None or tts.temp_path_for_chapter(chapter.id).exists():
+                continue  # already rendered in full; nothing to get ahead of
+            eff = effective_settings(novel, settings)
+            targets.append((chapter.id, chapter.rr_url, chapter.title,
+                            eff["voice"], eff["engine"]))
+    finally:
+        db.close()
+
+    for chapter_id, url, title, voice, engine_name in targets:
+        if chapter_id in _inflight:
+            continue
+        try:
+            await _wait_for_interactive_idle()
+            text = await _fetch_text(chapter_id, url)
+            if text is None:
+                continue
+            await tts.synthesize_chapter_streaming(
+                chapter_id, f"{title}\n\n{text}", voice, 1.0, engine_name,
+                None, HEAD_START_SECONDS)
+        except Exception:
+            logger.exception("Head start failed for chapter %d", chapter_id)
+
+
 def _run_retention_cleanup():
     db = SessionLocal()
     try:
@@ -164,6 +211,7 @@ async def drain_once():
         processed = True
     if processed:
         _run_retention_cleanup()
+        await head_start_pass()
 
 
 async def _worker_loop():
@@ -176,3 +224,4 @@ async def _worker_loop():
         while not queue.empty():
             await _process_one(queue.get_nowait())
         _run_retention_cleanup()
+        await head_start_pass()

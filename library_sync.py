@@ -118,7 +118,8 @@ async def _run():
     logger.info("Favorites sync started")
     db = SessionLocal()
     try:
-        favorite_ids = [n.id for n in db.query(Novel).filter(Novel.favorite.is_(True)).all()]
+        favorite_ids = [n.id for n in db.query(Novel).filter(
+            Novel.favorite.is_(True), Novel.archived.is_(False)).all()]
     finally:
         db.close()
 

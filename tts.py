@@ -297,12 +297,55 @@ def _aac_segment_path(chapter_id: int, index: int) -> Path:
 
 
 def _segment_index_path(chapter_id: int) -> Path:
-    """Sidecar recording each AAC segment's real, measured duration."""
+    """Sidecar holding each segment's measured duration plus a fingerprint of
+    the inputs that produced them."""
     return TEMP_DIR / f"chapter_{chapter_id}_segments.json"
 
 
-def record_segment_duration(chapter_id: int, index: int, duration: float):
-    """Append a measured segment duration to the chapter's sidecar.
+def render_fingerprint(text: str, engine_name: str, voice: str, chunk_count: int) -> dict:
+    """Identity of a render, so partial work is only resumed when it still applies.
+
+    The sentence pause is deliberately absent: it is applied when segments are
+    assembled, not baked into them, so changing it does not invalidate audio
+    already on disk. Everything else here does — a re-scrape changes the
+    sentences, and a different engine or voice changes who is speaking them.
+    """
+    import hashlib
+    return {
+        "text": hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16],
+        "engine": engine_name or "",
+        "voice": voice or "",
+        "chunks": chunk_count,
+    }
+
+
+def _read_sidecar(chapter_id: int) -> dict:
+    import json
+    path = _segment_index_path(chapter_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}
+    if isinstance(data, list):
+        # Pre-fingerprint format: durations only. Readable for playlist
+        # purposes but never resumable, since we can't tell what produced it.
+        return {"durations": data}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_sidecar(chapter_id: int, data: dict):
+    import json
+    try:
+        _segment_index_path(chapter_id).write_text(json.dumps(data))
+    except OSError:
+        pass
+
+
+def record_segment_duration(chapter_id: int, index: int, duration: float,
+                            fingerprint: dict | None = None):
+    """Record a segment's real length (and optionally the render fingerprint).
 
     The playlist used to recompute this as `wav duration + whatever gap the
     voice is set to now`, which breaks as soon as the pause changes: audio
@@ -314,40 +357,63 @@ def record_segment_duration(chapter_id: int, index: int, duration: float):
     ffprobe only estimates it from bitrate — unreliable to a few hundred ms.
     The WAV length plus the pad we passed to ffmpeg is exact.
     """
-    import json
-    path = _segment_index_path(chapter_id)
-    try:
-        durations = json.loads(path.read_text()) if path.exists() else []
-        if not isinstance(durations, list):
-            durations = []
-    except Exception:
+    data = _read_sidecar(chapter_id)
+    durations = data.get("durations")
+    if not isinstance(durations, list):
         durations = []
     while len(durations) <= index:
         durations.append(None)
     durations[index] = round(duration, 4)
-    try:
-        path.write_text(json.dumps(durations))
-    except OSError:
-        pass
+    data["durations"] = durations
+    if fingerprint is not None:
+        data["fingerprint"] = fingerprint
+    _write_sidecar(chapter_id, data)
 
 
 def segment_durations(chapter_id: int) -> list[float] | None:
-    """Measured segment durations, or None if this chapter predates the sidecar."""
-    import json
-    path = _segment_index_path(chapter_id)
-    if not path.exists():
-        return None
-    try:
-        durations = json.loads(path.read_text())
-    except Exception:
-        return None
-    if not isinstance(durations, list) or any(d is None for d in durations):
+    """Measured segment durations, or None if unusable/incomplete."""
+    durations = _read_sidecar(chapter_id).get("durations")
+    if not isinstance(durations, list) or not durations or any(d is None for d in durations):
         return None
     return [float(d) for d in durations]
 
 
+def resumable_segment_count(chapter_id: int, fingerprint: dict) -> int:
+    """How many leading segments of a partial render can be reused.
+
+    Derived from the files actually on disk rather than a stored counter: a
+    counter can desync from reality when retention sweeps a chapter or a write
+    fails halfway, and then it points at work that isn't there. The filesystem
+    cannot be wrong about which segments exist.
+
+    The highest segment is deliberately discarded. If the process died
+    mid-write it is a truncated WAV, and re-rendering one sentence is cheaper
+    than detecting corruption.
+    """
+    if _read_sidecar(chapter_id).get("fingerprint") != fingerprint:
+        return 0  # different text, engine or voice — the audio is not ours
+
+    index = 0
+    while _segment_path(chapter_id, index).exists():
+        index += 1
+    return max(0, index - 1)
+
+
+def discard_segments_from(chapter_id: int, start_index: int):
+    """Remove segment artifacts at or beyond an index (stale tail of a render)."""
+    index = start_index
+    while True:
+        wav, aac = _segment_path(chapter_id, index), _aac_segment_path(chapter_id, index)
+        if not wav.exists() and not aac.exists():
+            break
+        wav.unlink(missing_ok=True)
+        aac.unlink(missing_ok=True)
+        index += 1
+
+
 def _encode_segment_aac(chapter_id: int, index: int,
-                        gap_seconds: float = SEGMENT_GAP_SECONDS) -> bool:
+                        gap_seconds: float = SEGMENT_GAP_SECONDS,
+                        fingerprint: dict | None = None) -> bool:
     """
     Encode a WAV segment to packed ADTS AAC for native HLS playback (iOS).
     Returns False (and logs) if ffmpeg is unavailable or fails — the WAV
@@ -375,7 +441,8 @@ def _encode_segment_aac(chapter_id: int, index: int,
         return False
     try:
         record_segment_duration(chapter_id, index,
-                                sf.info(str(wav)).duration + gap_seconds)
+                                sf.info(str(wav)).duration + gap_seconds,
+                                fingerprint)
     except Exception:
         logger.warning("Could not record duration for chapter %d seg %d",
                        chapter_id, index)
@@ -399,6 +466,7 @@ async def synthesize_chapter_streaming(
     speed: float = 1.0,
     engine_name: str | None = None,
     chunk_voices: list[str] | None = None,
+    max_seconds: float | None = None,
 ):
     """
     Synthesize a chapter segment by segment for Instant Play.
@@ -410,6 +478,13 @@ async def synthesize_chapter_streaming(
     engine.plan_chunks(text); anything missing falls back to `voice`. Cloning
     engines cache each voice's conditionals, so switching between them per
     sentence costs a dict lookup after the first use.
+
+    `max_seconds` stops once that much audio exists, leaving a resumable
+    partial render — this is how a chapter gets a head start so playback can
+    begin while the rest is still being produced.
+
+    A render interrupted for any reason (restart, crash) resumes from the
+    segments already on disk rather than starting over.
     """
     # Check if already fully synthesized
     if temp_path_for_chapter(chapter_id).exists():
@@ -420,15 +495,41 @@ async def synthesize_chapter_streaming(
         }
         return
 
-    _streaming_state[chapter_id] = {
-        "segments": [], "complete": False,
-        "total_duration": 0.0, "file_ready": False,
-    }
-
     engine = await get_engine(engine_name)
     gap = engine.segment_gap(voice)
     loop = asyncio.get_event_loop()
+    chunks = engine.plan_chunks(text)
+    fingerprint = render_fingerprint(text, engine.name, voice, len(chunks))
+
+    # Reuse a partial render if one is on disk and was produced from the same
+    # text, engine and voice. Chunking is deterministic, so segment N is always
+    # the same sentence — the work already paid for is still good.
+    resume_from = resumable_segment_count(chapter_id, fingerprint)
+    discard_segments_from(chapter_id, resume_from)
+
     all_segments: list[np.ndarray] = []
+    resumed_duration = 0.0
+    for index in range(resume_from):
+        try:
+            audio, _sr = sf.read(str(_segment_path(chapter_id, index)), dtype="float32")
+        except Exception:
+            # Unreadable segment: everything from here on is suspect.
+            discard_segments_from(chapter_id, index)
+            all_segments = all_segments[:index]
+            resume_from = index
+            break
+        all_segments.append(audio)
+        resumed_duration += len(audio) / engine.sample_rate
+    if resume_from:
+        logger.info("Chapter %d resuming at chunk %d/%d (%.0fs already rendered)",
+                    chapter_id, resume_from, len(chunks), resumed_duration)
+
+    _streaming_state[chapter_id] = {
+        "segments": [len(a) / engine.sample_rate for a in all_segments],
+        "complete": False,
+        "total_duration": resumed_duration,
+        "file_ready": False,
+    }
 
     def _render_chunk(chunk_text: str, chunk_voice: str) -> list[np.ndarray]:
         return [a for a in engine.synthesize(chunk_text, chunk_voice, speed)
@@ -440,17 +541,21 @@ async def synthesize_chapter_streaming(
     # voice demo, or the chapter the user just pressed play on — can take the
     # worker. Rendering the chapter as one job made those wait out the entire
     # render, which on Chatterbox is many minutes.
-    seg_index = 0
+    seg_index = resume_from
+    stopped_early = False
     try:
-        for chunk_number, chunk_text in enumerate(engine.plan_chunks(text)):
+        for chunk_number in range(resume_from, len(chunks)):
+            if max_seconds is not None and                     _streaming_state[chapter_id]["total_duration"] >= max_seconds:
+                stopped_early = True
+                break
             chunk_voice = voice
             if chunk_voices and chunk_number < len(chunk_voices):
                 chunk_voice = chunk_voices[chunk_number] or voice
             for audio in await loop.run_in_executor(
-                    _executor, _render_chunk, chunk_text, chunk_voice):
+                    _executor, _render_chunk, chunks[chunk_number], chunk_voice):
                 all_segments.append(audio)
                 dur = _save_segment_wav(chapter_id, seg_index, audio, engine.sample_rate)
-                _encode_segment_aac(chapter_id, seg_index, gap)
+                _encode_segment_aac(chapter_id, seg_index, gap, fingerprint)
                 st = _streaming_state.get(chapter_id)
                 if st is not None:
                     st["segments"].append(dur)
@@ -458,6 +563,14 @@ async def synthesize_chapter_streaming(
                 seg_index += 1
     except Exception as e:
         logger.error("Streaming synthesis error for chapter %d: %s", chapter_id, e)
+
+    if stopped_early:
+        # A head start, not a finished chapter: leave the segments on disk for
+        # a later call to resume from, and write no full file — its existence
+        # is what marks a chapter complete.
+        logger.info("Chapter %d head start: %d chunk(s), %.0fs of audio",
+                    chapter_id, seg_index, _streaming_state[chapter_id]["total_duration"])
+        return
 
     # Save complete concatenated file
     if all_segments:

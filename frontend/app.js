@@ -162,6 +162,7 @@ function setLibraryTab(tab) {
 function applyLibraryTab() {
     document.getElementById('tab-all').classList.toggle('active', state.libraryTab === 'all');
     document.getElementById('tab-favorites').classList.toggle('active', state.libraryTab === 'favorites');
+    document.getElementById('tab-archived').classList.toggle('active', state.libraryTab === 'archived');
     renderLibrary();
 }
 
@@ -169,6 +170,12 @@ function sortedNovels() {
     let list = state.novels.slice();
     if (state.libraryTab === 'favorites') {
         list = list.filter(n => n.favorite);
+    } else if (state.libraryTab === 'archived') {
+        list = list.filter(n => n.archived);
+    } else {
+        // Archived novels are finished or paused; keep them out of the way
+        // without deleting them or their progress.
+        list = list.filter(n => !n.archived);
     }
     const comparators = {
         listened: (a, b) => (b.progress_updated_at || '').localeCompare(a.progress_updated_at || ''),
@@ -1753,6 +1760,7 @@ function openNovelSettings() {
     document.getElementById('ns-speed-value').textContent =
         ov.speed != null ? `${ov.speed.toFixed(2)}x` : `Default (${state.settings.speed.toFixed(2)}x)`;
 
+    document.getElementById('ns-archived').checked = !!novel.archived;
     document.getElementById('ns-autoplay').value = ov.auto_play == null ? '' : String(ov.auto_play);
     document.getElementById('ns-sort').value = ov.chapter_sort ?? '';
 
@@ -2054,6 +2062,7 @@ function setupEventListeners() {
     // Library tabs + sort
     document.getElementById('tab-all').addEventListener('click', () => setLibraryTab('all'));
     document.getElementById('tab-favorites').addEventListener('click', () => setLibraryTab('favorites'));
+    document.getElementById('tab-archived').addEventListener('click', () => setLibraryTab('archived'));
     document.getElementById('library-sort').addEventListener('change', (e) => {
         state.librarySort = e.target.value;
         localStorage.setItem('librarySort', state.librarySort);
@@ -2104,6 +2113,13 @@ function setupEventListeners() {
     });
     document.getElementById('ns-sort').addEventListener('change', (e) => {
         updateNovelSetting('chapter_sort', e.target.value || null);
+    });
+    document.getElementById('ns-archived').addEventListener('change', async (e) => {
+        await updateNovelSetting('archived', e.target.checked);
+        await loadLibrary();
+        showToast(e.target.checked
+            ? 'Archived — hidden from the library and no longer pre-rendered'
+            : 'Restored to the library');
     });
     document.getElementById('ns-speed-down').addEventListener('click', () => {
         const base = state.currentNovel?.settings?.speed ?? state.settings.speed;

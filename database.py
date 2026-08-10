@@ -55,6 +55,11 @@ class Novel(Base):
 
     # Library organization
     favorite = Column(Boolean, nullable=False, default=False)
+    # Finished, or on a break. Hidden from the library, excluded from the
+    # favorites crawl, prefetch and head start, and its audio is no longer
+    # kept forever — an abandoned novel shouldn't hold a chapter of audio
+    # indefinitely just because it was once started.
+    archived = Column(Boolean, nullable=False, default=False)
     sort_order = Column(Integer, nullable=True)  # manual card order; NULL = unordered
 
     chapters = relationship("Chapter", back_populates="novel", cascade="all, delete-orphan")
@@ -198,6 +203,7 @@ def _migrate_schema():
             "auto_play": "BOOLEAN",
             "chapter_sort": "TEXT",
             "favorite": "BOOLEAN NOT NULL DEFAULT 0",
+            "archived": "BOOLEAN NOT NULL DEFAULT 0",
             "sort_order": "INTEGER",
         },
         "chapters": {
@@ -255,7 +261,7 @@ def retention_policy(db: Session) -> tuple[set[int], set[int]]:
     """
     forever: set[int] = set()
     expiring: set[int] = set()
-    for novel in db.query(Novel).all():
+    for novel in db.query(Novel).filter(Novel.archived.is_(False)).all():
         current_order = 0
         prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
         if prog and prog.chapter_id:
