@@ -877,6 +877,11 @@ a:hover { color: var(--accent-hover); }
     justify-content: center;
     z-index: 500;
     backdrop-filter: blur(4px);
+    /* A dialog is narrower than the screen, so there is bare backdrop down
+       either side. A drag starting there was scrolling the library underneath
+       the open modal. Taps still land, so backdrop-to-close is unaffected. */
+    touch-action: none;
+    overscroll-behavior: contain;
 }
 
 .modal-content {
@@ -887,6 +892,13 @@ a:hover { color: var(--accent-hover); }
     width: 90%;
     max-width: 460px;
     box-shadow: var(--shadow);
+    /* Scroll inside the dialog rather than off the bottom of the viewport.
+       .modal-wide overrides this: it scrolls its inner panel instead so the
+       close row can stay pinned. */
+    max-height: 90vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
 }
 
 .modal-content h3 {
@@ -1004,10 +1016,26 @@ a:hover { color: var(--accent-hover); }
     display: flex;
     flex-direction: column;
 }
+.modal-wide { overflow: hidden; }   /* the inner panel is the only scroller */
 .modal-wide > .settings-panel {
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
+    /* Stop the scroll handing off to the library behind once the list ends.
+       Without this, flicking past the last row kept going and took the page
+       with it — and near the panel edge the gesture never reached the panel
+       at all, so it scrolled the chapter list instead. */
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+
+/* The close row sits below a scrolling list, so without a rule it reads as one
+   more item that happens to be stuck at the bottom. */
+.modal-wide > .modal-actions {
+    flex: 0 0 auto;
+    margin-top: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
 }
 .pron-subhead { margin: 18px 0 6px; font-size: 0.95rem; }
 .pron-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -1137,7 +1165,13 @@ a:hover { color: var(--accent-hover); }
 }
 .setting-hint:empty { display: none; }
 
-.setting-row select {
+/* The chapter-range pickers carry this class in both the export modal and the
+   scan panel. It used to have no rules of its own — the export ones only
+   looked right because they happened to sit inside a .setting-row, so moving
+   the scan ones out of that wrapper dropped them to raw browser defaults.
+   Styling the class directly makes the two match by construction. */
+.setting-row select,
+.export-chapter-select {
     background: var(--bg-input);
     color: var(--text-primary);
     border: 1px solid var(--border);
@@ -1146,6 +1180,7 @@ a:hover { color: var(--accent-hover); }
     font-size: 0.9rem;
     outline: none;
 }
+.export-chapter-select:focus { border-color: var(--accent); }
 
 .setting-row input[type="checkbox"] {
     width: 20px;

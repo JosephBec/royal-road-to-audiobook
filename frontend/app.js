@@ -1880,52 +1880,21 @@ function stopPronPreview() {
     if (pronPreviewAudio) { pronPreviewAudio.pause(); pronPreviewAudio = null; }
 }
 
-const DEMO_MAX_CHARS = 180;
-
-function wordPattern(word) {
-    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp('\\b' + escaped + '\\b', 'gi');
-}
-
-// Demo a word inside a sentence, never on its own.
+// Say the word in a short fixed frame — never bare, never the book's sentence.
 //
-// Chatterbox is autoregressive with no phoneme input, and on a bare one-word
-// prompt it has almost nothing to predict a stop from. Measured over five
-// renders of "Aether" alone: it spoke the word twice in two of them, and
-// produced a different reading every single time ("Acer", "A-sar", "Asa.
-// Asa.", "Ah, sir. Ha!"). The same word in a sentence doubled in none of five
-// and read consistently. So the doubling and the noise on the end were the
-// demo's fault, not the spelling's.
+// Bare fails: Chatterbox is autoregressive with no phoneme input, so a
+// one-word prompt gives it almost nothing to predict a stop from. Measured
+// over five renders of "Aether" alone it spoke the word twice in two of them,
+// and once fell into a stuck loop transcribing as "As-S-A-S-A-S-A-S...".
 //
-// The scan already knows a real sentence containing the word, which is also
-// the honest test: it is how the line will actually be narrated.
-function pronDemoPhrase(word, example, replacement) {
-    const spoken = replacement || word;
-    let sentence = (example || '').trim();
-    if (!sentence || !wordPattern(word).test(sentence)) {
-        sentence = 'The word is ' + spoken + '.';
-    } else if (replacement) {
-        sentence = sentence.replace(wordPattern(word), replacement);
-    }
-    // With no respelling the sentence is already the word as written. Rewriting
-    // it with the scan's capitalisation would turn a mid-sentence "aether" into
-    // "Aether", which reads as a proper noun — the A side of the comparison has
-    // to be untouched or it is not a comparison.
-    if (sentence.length > DEMO_MAX_CHARS) {
-        // Keep the window around the word rather than the start of the line,
-        // and cut on spaces so no word is sliced in half.
-        const at = sentence.search(wordPattern(spoken));
-        const from = Math.max(0, at - Math.floor(DEMO_MAX_CHARS / 2));
-        let clip = sentence.slice(from, from + DEMO_MAX_CHARS);
-        if (from > 0) clip = clip.slice(clip.indexOf(' ') + 1);
-        const lastSpace = clip.lastIndexOf(' ');
-        if (lastSpace > 0 && from + DEMO_MAX_CHARS < sentence.length) {
-            clip = clip.slice(0, lastSpace);
-        }
-        sentence = clip.trim();
-        if (!/[.!?]$/.test(sentence)) sentence += '.';
-    }
-    return sentence;
+// The book's own sentence fixes that but overshoots: asked to hear
+// "Ephesians" it narrated the surrounding cross-reference to Job 31, which is
+// not what "hear this word" should do.
+//
+// This frame was picked by measurement, not taste: four renders of the word
+// that destabilises worst, checked against a transcript, with no doubling.
+function pronDemoPhrase(word) {
+    return 'The word is ' + String(word).trim().replace(/[.!?]+$/, '') + '.';
 }
 
 // Hear a word as written, or as a respelling would make it. This is the only
@@ -2002,14 +1971,13 @@ function renderPronResults(words) {
     el.querySelectorAll('.pron-row').forEach(function (row) {
         const word = row.dataset.word;
         const input = row.querySelector('.pron-respell');
-        const example = row.querySelector('.pron-example')?.textContent || '';
         row.querySelectorAll('.pron-hear')[0].addEventListener('click', function (e) {
-            speakPhrase(pronDemoPhrase(word, example, null), e.currentTarget);
+            speakPhrase(pronDemoPhrase(word), e.currentTarget);
         });
         row.querySelectorAll('.pron-hear')[1].addEventListener('click', function (e) {
             const value = input.value.trim();
             if (!value) { showToast('Type a respelling first'); return; }
-            speakPhrase(pronDemoPhrase(word, example, value), e.currentTarget);
+            speakPhrase(pronDemoPhrase(value), e.currentTarget);
         });
         row.querySelector('.pron-save').addEventListener('click', async function () {
             const value = input.value.trim();
