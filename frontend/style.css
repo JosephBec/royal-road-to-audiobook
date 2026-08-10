@@ -969,6 +969,57 @@ a:hover { color: var(--accent-hover); }
     .skeleton-bar { animation: none; }
 }
 
+/* Pronunciation scan + text rules */
+.modal-wide { max-width: 760px; width: 92vw; }
+.pron-subhead { margin: 18px 0 6px; font-size: 0.95rem; }
+.pron-range { display: inline-flex; align-items: center; gap: 6px; }
+.pron-range input { width: 5.5em; }
+
+.pron-row {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+.pron-word { display: flex; align-items: baseline; gap: 8px; }
+.pron-count { color: var(--text-muted); font-size: 0.8rem; }
+.pron-example {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    margin: 2px 0 6px;
+    /* One line: enough to tell a name from a typo, not enough to dominate */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pron-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pron-respell { flex: 1 1 190px; min-width: 140px; }
+
+.rule-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+.rule-kind {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--border);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+}
+.rule-pattern, .rule-replacement {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 34%;
+}
+.rule-arrow { color: var(--text-muted); }
+.rule-shared { color: var(--text-muted); font-size: 0.72rem; }
+.rule-row .rule-delete { margin-left: auto; }
+.rule-example { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 0.82rem; }
+
 /* Per-voice sentence pause stepper, inline on each Voices row */
 .voice-pause {
     display: inline-flex;

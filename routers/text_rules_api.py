@@ -155,3 +155,99 @@ async def preview_rule(req: PreviewRequest, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"match_count": count, "examples": examples}
+
+
+# ===== pronunciation scanning =====
+
+class ScanRequest(BaseModel):
+    start_order: int | None = None
+    end_order: int | None = None
+
+
+@router.post("/novels/{novel_id}/pronunciation/scan")
+async def scan_pronunciation(novel_id: int, req: ScanRequest,
+                             db: Session = Depends(get_db)):
+    """Find words the narrator has no pronunciation for, in a chapter range.
+
+    Words that already have a respelling are excluded: once you have fixed
+    one, it should not keep appearing in the list every time you scan.
+    """
+    import pronunciation
+
+    if not db.query(Novel).filter(Novel.id == novel_id).first():
+        raise HTTPException(status_code=404, detail="Novel not found")
+    ok, reason = pronunciation.available()
+    if not ok:
+        raise HTTPException(status_code=503, detail=reason)
+
+    query = db.query(Chapter).filter(Chapter.novel_id == novel_id,
+                                     Chapter.text.isnot(None))
+    if req.start_order is not None:
+        query = query.filter(Chapter.order >= req.start_order)
+    if req.end_order is not None:
+        query = query.filter(Chapter.order <= req.end_order)
+    chapters = query.order_by(Chapter.order).all()
+    if not chapters:
+        raise HTTPException(
+            status_code=409,
+            detail="No chapters in that range have had their text fetched yet")
+
+    # Anything already respelled is solved; don't report it again.
+    existing = {r.pattern.casefold() for r in
+                db.query(TextRule).filter(TextRule.kind == "literal").all()}
+    findings = pronunciation.scan_chapters(chapters, skip=existing)
+
+    return {
+        "chapters_scanned": len(chapters),
+        "words": findings,
+        "already_handled": len(existing),
+    }
+
+
+class SpeakRequest(BaseModel):
+    text: str
+    voice: str | None = None
+    engine: str | None = None
+
+
+@router.post("/pronunciation/speak")
+async def speak_phrase(req: SpeakRequest, db: Session = Depends(get_db)):
+    """Synthesize a short phrase so a respelling can be judged by ear.
+
+    This is the only way to tell whether a respelling works: the phonemes are
+    not the point, what it sounds like is.
+    """
+    import hashlib
+    from pathlib import Path
+
+    import numpy as np
+    import soundfile as sf
+    from fastapi.responses import FileResponse
+
+    import engines as engine_registry
+    import tts
+    from database import Settings
+
+    phrase = (req.text or "").strip()
+    if not phrase:
+        raise HTTPException(status_code=400, detail="Nothing to say")
+    if len(phrase) > 200:
+        raise HTTPException(status_code=400, detail="Keep the phrase under 200 characters")
+
+    settings = db.query(Settings).first()
+    engine_name = req.engine or (settings.engine if settings else None)
+    impl = engine_registry.get_engine(engine_name)
+    voice = engine_registry.resolve_voice(
+        impl.name, req.voice or (settings.voice if settings else None))
+
+    # Cache on the exact phrase, so re-hearing a respelling is instant and the
+    # GPU isn't asked to repeat itself.
+    key = hashlib.sha1(f"{impl.name}|{voice}|{phrase}".encode()).hexdigest()[:16]
+    out = tts.TEMP_DIR / f"say_{key}.wav"
+    if not out.exists():
+        with tts.interactive_synthesis():
+            segments = await tts.synthesize_batch(phrase, voice, 1.0, impl.name)
+        if not segments:
+            raise HTTPException(status_code=502, detail="Produced no audio")
+        sf.write(str(out), np.concatenate(segments), impl.sample_rate, subtype="PCM_16")
+    return FileResponse(str(out), media_type="audio/wav", filename="phrase.wav")

@@ -31,6 +31,7 @@ MAX_PATTERN_LENGTH = 500
 _ROMAN_RE = re.compile(
     r"^M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})$", re.IGNORECASE)
 _ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+BOUNDARY = chr(92) + "b"   # the regex word-boundary token
 _BACKREF = re.compile(r"\\(\d)")
 
 
@@ -53,12 +54,32 @@ def roman_to_int(token: str) -> int | None:
     return total or None
 
 
+def literal_pattern(word: str) -> str:
+    """Whole-word, case-insensitive pattern for a literal respelling.
+
+    Built here rather than asked of the user: a name is not a regular
+    expression, and one containing a '.' or '(' would otherwise match things
+    it shouldn't.
+    """
+    word = word.strip()
+    # A word boundary only exists next to a word character. "Dr." ends in a
+    # period, so a trailing boundary could never match and the rule would
+    # silently do nothing. Anchor only the sides that can be anchored.
+    lead = BOUNDARY if word[:1].isalnum() or word[:1] == "_" else ""
+    tail = BOUNDARY if word[-1:].isalnum() or word[-1:] == "_" else ""
+    return "(?i)" + lead + re.escape(word) + tail
+
+
 def validate(kind: str, pattern: str, replacement: str) -> str | None:
     """Reason the rule is unusable, or None if it's fine."""
-    if kind not in ("regex", "roman"):
+    if kind not in ("regex", "roman", "literal"):
         return f"unknown rule kind '{kind}'"
     if not pattern:
         return "pattern is required"
+    if kind == "literal":
+        if not replacement.strip():
+            return "a respelling is required"
+        return None
     if len(pattern) > MAX_PATTERN_LENGTH:
         return f"pattern is longer than {MAX_PATTERN_LENGTH} characters"
     try:
@@ -93,6 +114,8 @@ def _substitute(match: re.Match, replacement: str, convert_roman: bool) -> str:
 def apply_rule(text: str, kind: str, pattern: str, replacement: str) -> str:
     """Apply one rule. A rule that fails is skipped, never fatal — a bad rule
     should cost you a mispronounced line, not a chapter that won't render."""
+    if kind == "literal":
+        pattern = literal_pattern(pattern)
     try:
         compiled = re.compile(pattern)
     except re.error:
@@ -151,6 +174,8 @@ def preview(text: str, kind: str, pattern: str, replacement: str, limit: int = 8
     problem = validate(kind, pattern, replacement)
     if problem:
         raise ValueError(problem)
+    if kind == "literal":
+        pattern = literal_pattern(pattern)
     compiled = re.compile(pattern)
     convert_roman = kind == "roman"
     examples = []

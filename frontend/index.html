@@ -68,6 +68,7 @@
                 <div class="novel-header-actions">
                     <button id="btn-favorite" class="secondary-btn" title="Favorite">☆</button>
                     <button id="btn-archive" class="secondary-btn" title="Archive">📦</button>
+                    <button id="btn-pronunciation" class="secondary-btn" title="Pronunciation &amp; text rules">🗣<span class="btn-label"> Speech</span></button>
                     <button id="btn-novel-settings" class="secondary-btn" title="Novel settings">⚙<span class="btn-label"> Novel</span></button>
                     <button id="btn-refresh" class="secondary-btn" title="Check for new chapters">↻<span class="btn-label"> Refresh</span></button>
                     <button id="btn-save-plex" class="secondary-btn" title="Save to Plex">💾<span class="btn-label"> Save to Plex</span></button>
@@ -236,6 +237,60 @@
     </div>
 
     <!-- Per-Novel Settings Modal -->
+    <div id="modal-pronunciation" class="modal" style="display:none;">
+        <div class="modal-content modal-wide">
+            <h3>Pronunciation &amp; Text Rules</h3>
+            <p id="pron-novel-name" class="hint"></p>
+
+            <div class="settings-tabs">
+                <button class="lib-tab pron-tab active" data-ptab="scan">Scan</button>
+                <button class="lib-tab pron-tab" data-ptab="rules">Rules</button>
+            </div>
+
+            <div id="pron-panel-scan" class="settings-panel">
+                <div class="setting-row">
+                    <label>Chapters</label>
+                    <span class="pron-range">
+                        <input type="number" id="pron-start" min="1" placeholder="from">
+                        <span>to</span>
+                        <input type="number" id="pron-end" min="1" placeholder="to">
+                        <button id="btn-pron-scan" class="primary-btn btn-small">Scan</button>
+                    </span>
+                </div>
+                <p class="hint" id="pron-scan-status">
+                    Finds words the narrator has no pronunciation for. Runs on the CPU,
+                    so it works while a chapter is rendering.
+                </p>
+                <div id="pron-results"></div>
+            </div>
+
+            <div id="pron-panel-rules" class="settings-panel" style="display:none;">
+                <div id="pron-rules-list"></div>
+                <h4 class="pron-subhead">Add a rule</h4>
+                <div class="setting-row">
+                    <label for="rule-kind">Kind</label>
+                    <select id="rule-kind">
+                        <option value="literal">Respelling (a word)</option>
+                        <option value="regex">Pattern (regex)</option>
+                        <option value="roman">Pattern + Roman numerals</option>
+                    </select>
+                </div>
+                <input type="text" id="rule-pattern" placeholder="word, or regular expression">
+                <input type="text" id="rule-replacement" placeholder="replacement (use  for groups)">
+                <input type="text" id="rule-note" placeholder="note to self (optional)">
+                <div class="modal-actions">
+                    <button id="btn-rule-preview" class="secondary-btn">Preview</button>
+                    <button id="btn-rule-save" class="primary-btn">Save rule</button>
+                </div>
+                <div id="rule-preview-out"></div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="btn-pron-close" class="secondary-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div id="modal-novel-settings" class="modal" style="display:none;">
         <div class="modal-content">
             <h3>Novel Settings</h3>

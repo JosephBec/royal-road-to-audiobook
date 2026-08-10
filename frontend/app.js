@@ -1742,6 +1742,225 @@ async function toggleArchive() {
     }
 }
 
+
+// ===== Pronunciation & text rules =====
+//
+// Two problems share one screen because they share a mechanism: both rewrite
+// chapter text before it is spoken. Scanning finds words the narrator has no
+// pronunciation for; rules are the general form of the same thing.
+
+let pronPreviewAudio = null;
+
+function openPronunciation() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    document.getElementById('pron-novel-name').textContent = novel.title;
+    document.getElementById('pron-start').value = 1;
+    document.getElementById('pron-end').value = Math.min(novel.total_chapters || 1, 10);
+    document.getElementById('pron-results').innerHTML = '';
+    document.getElementById('rule-preview-out').innerHTML = '';
+    switchPronTab('scan');
+    loadRules();
+    document.getElementById('modal-pronunciation').style.display = 'flex';
+}
+
+function closePronunciation() {
+    stopPronPreview();
+    document.getElementById('modal-pronunciation').style.display = 'none';
+}
+
+function switchPronTab(name) {
+    document.querySelectorAll('.pron-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.ptab === name));
+    ['scan', 'rules'].forEach(t => {
+        document.getElementById('pron-panel-' + t).style.display = t === name ? '' : 'none';
+    });
+}
+
+function stopPronPreview() {
+    if (pronPreviewAudio) { pronPreviewAudio.pause(); pronPreviewAudio = null; }
+}
+
+// Hear a word as written, or as a respelling would make it. This is the only
+// way to judge a respelling — the phonemes are not the point, the sound is.
+async function speakPhrase(text, button) {
+    stopPronPreview();
+    const original = button ? button.textContent : null;
+    if (button) { button.textContent = '...'; button.disabled = true; }
+    try {
+        const resp = await fetch('/api/pronunciation/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text }),
+        });
+        if (!resp.ok) {
+            let detail = resp.statusText;
+            try { detail = (await resp.json()).detail || detail; } catch (err) {}
+            throw new Error(detail);
+        }
+        const url = URL.createObjectURL(await resp.blob());
+        pronPreviewAudio = new Audio(url);
+        pronPreviewAudio.play().catch(() => {});
+    } catch (e) {
+        showToast('Could not speak that: ' + e.message);
+    } finally {
+        if (button) { button.textContent = original; button.disabled = false; }
+    }
+}
+
+async function scanPronunciation() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    const status = document.getElementById('pron-scan-status');
+    const results = document.getElementById('pron-results');
+    const start = parseInt(document.getElementById('pron-start').value, 10) || null;
+    const end = parseInt(document.getElementById('pron-end').value, 10) || null;
+
+    status.textContent = 'Scanning… this reads every chapter in the range.';
+    results.innerHTML = '';
+    try {
+        const data = await api('POST', '/api/novels/' + novel.id + '/pronunciation/scan',
+                               { start_order: start, end_order: end });
+        status.textContent = data.words.length + ' word(s) with no known pronunciation across '
+            + data.chapters_scanned + ' chapter(s). '
+            + data.already_handled + ' already respelled.';
+        renderPronResults(data.words);
+    } catch (e) {
+        status.textContent = 'Scan failed: ' + e.message;
+    }
+}
+
+function renderPronResults(words) {
+    const el = document.getElementById('pron-results');
+    if (!words.length) {
+        el.innerHTML = '<p class="hint">Nothing unpronounceable found in that range.</p>';
+        return;
+    }
+    el.innerHTML = words.map(function (w) {
+        return '<div class="pron-row" data-word="' + escapeHtml(w.word) + '">'
+            + '<div class="pron-word"><strong>' + escapeHtml(w.word) + '</strong>'
+            + '<span class="pron-count">x' + w.count + '</span></div>'
+            + '<div class="pron-example">' + escapeHtml(w.example || '') + '</div>'
+            + '<div class="pron-actions">'
+            + '<button class="small-btn pron-hear-old">&#9654; as written</button>'
+            + '<input type="text" class="pron-respell" placeholder="respelling, e.g. Kai-LIN-theer">'
+            + '<button class="small-btn pron-hear-new">&#9654; respelling</button>'
+            + '<button class="secondary-btn btn-small pron-save">Save</button>'
+            + '</div></div>';
+    }).join('');
+
+    el.querySelectorAll('.pron-row').forEach(function (row) {
+        const word = row.dataset.word;
+        const input = row.querySelector('.pron-respell');
+        row.querySelector('.pron-hear-old').addEventListener('click', function (e) {
+            speakPhrase(word, e.currentTarget);
+        });
+        row.querySelector('.pron-hear-new').addEventListener('click', function (e) {
+            const value = input.value.trim();
+            if (!value) { showToast('Type a respelling first'); return; }
+            speakPhrase(value, e.currentTarget);
+        });
+        row.querySelector('.pron-save').addEventListener('click', async function () {
+            const value = input.value.trim();
+            if (!value) { showToast('Type a respelling first'); return; }
+            try {
+                await api('POST', '/api/novels/' + state.currentNovel.id + '/text-rules', {
+                    kind: 'literal', pattern: word, replacement: value,
+                    note: 'pronunciation', sort_order: 100,
+                });
+                // Solved words leave the list, and a rescan won't surface them again.
+                row.remove();
+                showToast('"' + word + '" will be spoken as "' + value + '"');
+                loadRules();
+            } catch (e) {
+                showToast('Could not save: ' + e.message);
+            }
+        });
+    });
+}
+
+async function loadRules() {
+    const el = document.getElementById('pron-rules-list');
+    if (!state.currentNovel) return;
+    try {
+        const data = await api('GET', '/api/novels/' + state.currentNovel.id + '/text-rules');
+        const shared = data.global_rules.map(function (r) {
+            return Object.assign({}, r, { shared: true });
+        });
+        const all = data.rules.concat(shared);
+        if (!all.length) {
+            el.innerHTML = '<p class="hint">No rules yet for this novel.</p>';
+            return;
+        }
+        el.innerHTML = all.map(function (r) {
+            return '<div class="rule-row" data-id="' + r.id + '">'
+                + '<span class="rule-kind">' + escapeHtml(r.kind) + '</span>'
+                + '<code class="rule-pattern">' + escapeHtml(r.pattern) + '</code>'
+                + '<span class="rule-arrow">&rarr;</span>'
+                + '<code class="rule-replacement">' + escapeHtml(r.replacement) + '</code>'
+                + (r.shared ? '<span class="rule-shared">global</span>' : '')
+                + '<button class="small-btn rule-delete" title="Delete">&#10005;</button>'
+                + '</div>';
+        }).join('');
+        el.querySelectorAll('.rule-delete').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                const id = btn.closest('.rule-row').dataset.id;
+                try {
+                    await api('DELETE', '/api/text-rules/' + id);
+                    loadRules();
+                    showToast('Rule deleted — cached audio cleared');
+                } catch (e) { showToast('Could not delete: ' + e.message); }
+            });
+        });
+    } catch (e) {
+        el.innerHTML = '<p class="hint">Could not load rules.</p>';
+    }
+}
+
+async function previewRule() {
+    const out = document.getElementById('rule-preview-out');
+    const kind = document.getElementById('rule-kind').value;
+    const pattern = document.getElementById('rule-pattern').value;
+    const replacement = document.getElementById('rule-replacement').value;
+    // Preview against a real chapter: a pattern that looks right often isn't.
+    const chapter = state.chapters.length ? state.chapters[0] : null;
+    try {
+        const body = { kind: kind, pattern: pattern, replacement: replacement };
+        if (chapter) { body.chapter_id = chapter.id; }
+        else { body.text = 'Stealth V and Blade Mastery 4 > 5.'; }
+        const data = await api('POST', '/api/text-rules/preview', body);
+        out.innerHTML = '<p class="hint">' + data.match_count + ' match(es)</p>'
+            + data.examples.map(function (e) {
+                return '<div class="rule-example"><code>' + escapeHtml(e.before) + '</code>'
+                    + '<span class="rule-arrow">&rarr;</span>'
+                    + '<code>' + escapeHtml(e.after) + '</code></div>';
+            }).join('');
+    } catch (e) {
+        out.innerHTML = '<p class="error-msg">' + escapeHtml(e.message) + '</p>';
+    }
+}
+
+async function saveRule() {
+    const kind = document.getElementById('rule-kind').value;
+    const pattern = document.getElementById('rule-pattern').value.trim();
+    const replacement = document.getElementById('rule-replacement').value;
+    const note = document.getElementById('rule-note').value.trim();
+    if (!pattern) { showToast('A pattern is required'); return; }
+    try {
+        await api('POST', '/api/novels/' + state.currentNovel.id + '/text-rules',
+                  { kind: kind, pattern: pattern, replacement: replacement,
+                    note: note || null, sort_order: 50 });
+        document.getElementById('rule-pattern').value = '';
+        document.getElementById('rule-replacement').value = '';
+        document.getElementById('rule-note').value = '';
+        document.getElementById('rule-preview-out').innerHTML = '';
+        loadRules();
+        showToast('Rule saved — cached audio cleared');
+    } catch (e) {
+        showToast('Could not save: ' + e.message);
+    }
+}
+
 // ===== Drag-to-reorder =====
 // Touch/pen: 400ms long-press (movement first = scroll, not drag).
 // Mouse: no timer — press and move past a small threshold drags immediately;
@@ -2184,6 +2403,17 @@ function setupEventListeners() {
     document.getElementById('btn-favorite').addEventListener('click', () => {
         if (state.currentNovel) toggleFavorite(state.currentNovel.id);
     });
+    document.getElementById('btn-pronunciation').addEventListener('click', openPronunciation);
+    document.getElementById('btn-pron-close').addEventListener('click', closePronunciation);
+    document.getElementById('modal-pronunciation').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closePronunciation();
+    });
+    document.querySelectorAll('.pron-tab').forEach(b =>
+        b.addEventListener('click', () => switchPronTab(b.dataset.ptab)));
+    document.getElementById('btn-pron-scan').addEventListener('click', scanPronunciation);
+    document.getElementById('btn-rule-preview').addEventListener('click', previewRule);
+    document.getElementById('btn-rule-save').addEventListener('click', saveRule);
+
     document.getElementById('btn-archive').addEventListener('click', toggleArchive);
 
     // Per-novel settings
