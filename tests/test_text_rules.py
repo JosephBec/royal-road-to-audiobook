@@ -155,6 +155,90 @@ def test_backfill_targets_only_chapters_without_text():
     db.commit(); db.close()
 
 
+def test_backfill_finds_only_novels_actually_missing_text():
+    """The refresh sweep must not re-walk books that are already complete."""
+    import database, text_backfill
+    database.init_db()
+    db = database.SessionLocal()
+
+    complete = database.Novel(title="Complete Novel",
+                              rr_url="https://example.com/fiction/9001/a")
+    partial = database.Novel(title="Partial Novel",
+                             rr_url="https://example.com/fiction/9002/b")
+    archived = database.Novel(title="Archived Novel", archived=True,
+                              rr_url="https://example.com/fiction/9003/c")
+    db.add_all([complete, partial, archived]); db.flush()
+    db.add(database.Chapter(novel_id=complete.id, title="c", order=1,
+                            rr_url="u1", text="here"))
+    db.add(database.Chapter(novel_id=partial.id, title="c", order=1,
+                            rr_url="u2", text=None))
+    db.add(database.Chapter(novel_id=archived.id, title="c", order=1,
+                            rr_url="u3", text=None))
+    db.commit()
+    partial_id, complete_id, archived_id = partial.id, complete.id, archived.id
+    db.close()
+
+    missing = text_backfill.novels_missing_text()
+    assert partial_id in missing
+    assert complete_id not in missing
+    # Archiving a book is how you say "stop spending effort on this one".
+    assert archived_id not in missing
+
+    db = database.SessionLocal()
+    for nid in (complete_id, partial_id, archived_id):
+        db.delete(db.query(database.Novel).filter(database.Novel.id == nid).first())
+    db.commit(); db.close()
+
+
+def test_refresh_sweep_yields_to_a_user_triggered_backfill(monkeypatch):
+    """Two backfills at once would double the request rate at the source."""
+    import asyncio, text_backfill
+
+    monkeypatch.setattr(text_backfill, "novels_missing_text", lambda: [1, 2, 3])
+    monkeypatch.setattr(text_backfill, "is_running", lambda: True)
+    ran = []
+
+    async def fake_run(novel_id, start, end):
+        ran.append(novel_id)
+    monkeypatch.setattr(text_backfill, "_run", fake_run)
+
+    asyncio.run(text_backfill.backfill_all_active())
+    assert ran == []
+
+
+def test_refresh_sweep_covers_every_novel_missing_text(monkeypatch):
+    import asyncio, text_backfill
+
+    monkeypatch.setattr(text_backfill, "novels_missing_text", lambda: [4, 5])
+    monkeypatch.setattr(text_backfill, "is_running", lambda: False)
+    ran = []
+
+    async def fake_run(novel_id, start, end):
+        ran.append(novel_id)
+    monkeypatch.setattr(text_backfill, "_run", fake_run)
+
+    asyncio.run(text_backfill.backfill_all_active())
+    assert ran == [4, 5]
+
+
+def test_one_failing_novel_does_not_stop_the_sweep(monkeypatch):
+    """A dead link in one book must not strand the rest of the library."""
+    import asyncio, text_backfill
+
+    monkeypatch.setattr(text_backfill, "novels_missing_text", lambda: [6, 7, 8])
+    monkeypatch.setattr(text_backfill, "is_running", lambda: False)
+    ran = []
+
+    async def fake_run(novel_id, start, end):
+        ran.append(novel_id)
+        if novel_id == 7:
+            raise RuntimeError("scraper exploded")
+    monkeypatch.setattr(text_backfill, "_run", fake_run)
+
+    asyncio.run(text_backfill.backfill_all_active())
+    assert ran == [6, 7, 8]
+
+
 def test_backfill_refuses_to_start_while_one_is_running(monkeypatch):
     """Two concurrent backfills would double the request rate at the source."""
     import text_backfill

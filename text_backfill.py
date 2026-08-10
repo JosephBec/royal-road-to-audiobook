@@ -59,6 +59,42 @@ def start(novel_id: int, start_order: int | None, end_order: int | None) -> dict
     return {"started": True, "status": status()}
 
 
+def novels_missing_text() -> list[int]:
+    """Active novels with at least one chapter whose text was never fetched."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(Chapter.novel_id)
+                .join(Novel, Novel.id == Chapter.novel_id)
+                .filter(Novel.archived.is_(False), Chapter.text.is_(None))
+                .distinct().all())
+        return [row[0] for row in rows]
+    finally:
+        db.close()
+
+
+async def backfill_all_active():
+    """Fetch every missing chapter's text, one novel at a time.
+
+    Text caching used to be a button in the pronunciation panel, which asked
+    the reader to decide something they have no basis to decide — a whole
+    library of text is about 12 MB, and everything that reads across a book
+    needs it. It belongs with the library refresh, where new chapters are
+    already being discovered.
+
+    Deliberately sequential, and it inherits the per-request delay: the cost
+    lands on someone else's server.
+    """
+    for novel_id in novels_missing_text():
+        if is_running():
+            return          # a user-triggered backfill owns the pipe; don't stack
+        try:
+            await _run(novel_id, None, None)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Background text backfill failed for novel %d", novel_id)
+
+
 def _pending_chapters(db, novel_id, start_order, end_order):
     query = db.query(Chapter).filter(Chapter.novel_id == novel_id,
                                      Chapter.text.is_(None))

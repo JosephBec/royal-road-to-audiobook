@@ -1387,6 +1387,7 @@ const KEEPALIVE_KEY = 'iosKeepSessionAlive';
 const KEEPALIVE_MAX_MS = 45 * 60 * 1000;
 let silentLoop = null;
 let keepaliveExpiry = null;
+let keepaliveActive = false;
 
 function keepaliveEnabled() {
     return localStorage.getItem(KEEPALIVE_KEY) === '1';
@@ -1419,6 +1420,16 @@ function startSilentKeepalive() {
         silentLoop.volume = 0;
     }
     silentLoop.play().catch(() => {});   // blocked before any user gesture; harmless
+    keepaliveActive = true;
+    // Drop the timeline while the silent loop holds the session.
+    //
+    // iOS takes its Now Playing item from whichever element is actually
+    // playing, and once paused that is the keepalive — but the position state
+    // still described the chapter. The lock screen therefore showed the
+    // chapter's full length and ran a progress bar across all of it while
+    // nothing audible was playing. Clearing it leaves the title and controls
+    // and removes the scrubber, which is the honest display for "paused".
+    clearPositionState();
     if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
     keepaliveExpiry = setTimeout(stopSilentKeepalive, KEEPALIVE_MAX_MS);
 }
@@ -1426,6 +1437,14 @@ function startSilentKeepalive() {
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
     if (silentLoop) silentLoop.pause();
+    keepaliveActive = false;
+}
+
+function clearPositionState() {
+    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+    try {
+        navigator.mediaSession.setPositionState();   // no argument clears it
+    } catch (e) {}
 }
 
 function assertPausedState() {
@@ -1455,6 +1474,10 @@ function reviveMediaSession() {
 
 function updatePositionState() {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+    // Republishing the chapter's timeline while the keepalive is the playing
+    // element is what put a running progress bar on the lock screen during a
+    // pause. Nothing to say until real playback resumes.
+    if (keepaliveActive) return;
     const { duration, currentTime, playbackRate } = state.audio;
     if (!isFinite(duration) || !duration) return;
     try {
@@ -1967,10 +1990,10 @@ function renderPronResults(words) {
             + '<div class="pron-example">' + escapeHtml(w.example || '') + '</div>'
             + '<div class="pron-actions">'
             + '<button class="secondary-btn btn-small pron-hear">&#9654; as written</button>'
-            // Plain letters, not the KAI-lin-theer convention. Chatterbox has
-            // no phoneme input, so it reads a capitalised hyphenated respelling
-            // as letters — "AY-thur" comes out "AYHA".
-            + '<input type="text" class="pron-respell" placeholder="respelling, e.g. kaylintheer">'
+            // No worked example. Chatterbox has no phoneme input, so there is
+            // no notation to teach — you just spell it how it should sound, and
+            // an invented sample word implied a convention that does not exist.
+            + '<input type="text" class="pron-respell" placeholder="spell it how it should sound">'
             + '<button class="secondary-btn btn-small pron-hear">&#9654; respelling</button>'
             + '<button class="secondary-btn btn-small pron-save">Save</button>'
             + '</div></div>';
@@ -2097,7 +2120,6 @@ async function saveRule() {
 // for pronunciation should not require listening to it first. Text is about
 // 20 KB a chapter, so caching a whole book costs a few megabytes.
 
-let backfillPoll = null;
 
 function formatBytes(n) {
     if (!n) return '0 KB';
@@ -2105,73 +2127,24 @@ function formatBytes(n) {
     return (n / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+// Coverage is still worth stating — it tells you whether a scan can see the
+// whole range. There is no longer a button, because backfilling is not a
+// decision: the library refresh fetches whatever text is missing.
 async function refreshTextCoverage() {
     const el = document.getElementById('pron-coverage');
     if (!el || !state.currentNovel) return;
     try {
         const d = await api('GET', '/api/novels/' + state.currentNovel.id + '/text-coverage');
-        const btn = document.getElementById('btn-fetch-text');
         if (d.missing === 0) {
             el.textContent = 'All ' + d.total_chapters + ' chapters have text ('
                 + formatBytes(d.cached_bytes) + ').';
-            if (btn) btn.style.display = 'none';
         } else {
-            const projected = d.estimated_full_bytes
-                ? ', about ' + formatBytes(d.estimated_full_bytes) + ' for the whole novel'
-                : '';
             el.textContent = d.cached + ' of ' + d.total_chapters
-                + ' chapters have text' + projected + '.';
-            if (btn) btn.style.display = '';
+                + ' chapters have text — the rest are being fetched in the background.';
         }
     } catch (e) {
         el.textContent = '';
     }
-}
-
-async function startTextBackfill() {
-    if (!state.currentNovel) return;
-    const start = parseInt(document.getElementById('pron-start').value, 10) || null;
-    const end = parseInt(document.getElementById('pron-end').value, 10) || null;
-    try {
-        await api('POST', '/api/novels/' + state.currentNovel.id + '/fetch-text',
-                  { start_order: start, end_order: end });
-        showToast('Fetching chapter text in the background');
-        pollBackfill();
-    } catch (e) {
-        showToast('Could not start: ' + e.message);
-    }
-}
-
-function pollBackfill() {
-    if (backfillPoll) clearInterval(backfillPoll);
-    const el = document.getElementById('pron-backfill-status');
-    backfillPoll = setInterval(async function () {
-        try {
-            const s = await api('GET', '/api/text-backfill/status');
-            if (!s.running) {
-                clearInterval(backfillPoll);
-                backfillPoll = null;
-                el.textContent = s.total
-                    ? 'Fetched ' + s.done + ' chapter(s)'
-                        + (s.failed ? ', ' + s.failed + ' failed' : '') + '.'
-                    : '';
-                refreshTextCoverage();
-                return;
-            }
-            el.textContent = s.novel + ': ' + s.done + ' of ' + s.total
-                + (s.failed ? ' (' + s.failed + ' failed)' : '');
-        } catch (e) {
-            clearInterval(backfillPoll);
-            backfillPoll = null;
-        }
-    }, 1500);
-}
-
-async function cancelTextBackfill() {
-    try {
-        await api('POST', '/api/text-backfill/cancel');
-        showToast('Backfill cancelled');
-    } catch (e) { /* nothing running */ }
 }
 
 // ===== Drag-to-reorder =====
@@ -2367,9 +2340,13 @@ function openExportModal() {
 }
 
 // Measured on this machine's RTX 2070: seconds of audio produced per second
-// of rendering. Chatterbox is ~30x slower than Kokoro, so a range that takes
+// of rendering. Chatterbox is ~35x slower than Kokoro, so a range that takes
 // hours on one takes days on the other — worth saying before you start it.
-const ENGINE_THROUGHPUT = { kokoro: 50, chatterbox: 1.9 };
+//
+// Chatterbox was 1.9 here, which was optimistic and made every export estimate
+// read about 25% short. 1.43 is what four consecutive chapters actually
+// averaged end to end, including the scraping between them.
+const ENGINE_THROUGHPUT = { kokoro: 50, chatterbox: 1.43 };
 const WORDS_PER_MINUTE = 155;  // typical narration pace
 
 function updateExportNamePreview() {
@@ -2609,8 +2586,6 @@ function setupEventListeners() {
     document.querySelectorAll('.pron-tab').forEach(b =>
         b.addEventListener('click', () => switchPronTab(b.dataset.ptab)));
     document.getElementById('btn-pron-scan').addEventListener('click', scanPronunciation);
-    document.getElementById('btn-fetch-text').addEventListener('click', startTextBackfill);
-    document.getElementById('btn-fetch-cancel').addEventListener('click', cancelTextBackfill);
     document.getElementById('btn-rule-preview').addEventListener('click', previewRule);
     document.getElementById('btn-rule-save').addEventListener('click', saveRule);
 

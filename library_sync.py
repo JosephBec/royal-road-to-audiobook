@@ -137,6 +137,18 @@ async def _run():
     tts.cleanup_temp_files(forever, expiring)
     logger.info("Favorites sync complete (%d favorites)", len(favorite_ids))
 
+    # Cache any chapter text that is still missing. Chapter text is only stored
+    # as a side effect of playing or prefetching, so everything behind the
+    # reader's position was never fetched — and pronunciation scanning, speaker
+    # tagging and search all read across the whole book. A library's worth is
+    # roughly 12 MB, so there is nothing to weigh up; it just needs doing, and
+    # this is where new chapters are already being discovered.
+    try:
+        import text_backfill
+        await text_backfill.backfill_all_active()
+    except Exception:
+        logger.exception("Background text backfill failed")
+
 
 async def _sync_novel(novel_id: int):
     db = SessionLocal()

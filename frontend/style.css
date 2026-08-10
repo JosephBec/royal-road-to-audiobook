@@ -1025,6 +1025,20 @@ a:hover { color: var(--accent-hover); }
     outline: none;
 }
 .modal-content input[type="number"]:focus { border-color: var(--accent); }
+/* Label above, not beside. A chapter title is long enough on its own; putting
+   "Chapters" to its left pushed the pickers and the Scan button past the edge
+   of the panel and made the whole page scroll sideways. */
+.pron-range-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+.pron-range-block > label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
 /* The range pickers hold "412. The Long Road Down", not a 3-digit number, so
    they need room — but a chapter title can be any length and must never push
    the row off screen. Grow to share the space, truncate rather than overflow. */
