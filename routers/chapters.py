@@ -25,7 +25,7 @@ from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
     get_chapter_status, get_streaming_state,
-    cleanup_temp_files, interactive_synthesis,
+    cleanup_temp_files, interactive_synthesis, is_rendering,
     temp_path_for_chapter, _segment_path,
     _aac_segment_path, SEGMENT_GAP_SECONDS, segment_gap_for,
     segment_durations as recorded_segment_durations,
@@ -263,6 +263,17 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     if status["ready"]:
         asyncio.create_task(_after_synthesis())
         return {**status, "mode": "full"}
+
+    # Already being rendered — by the head start, by prefetch, or by an earlier
+    # press of play. Starting a second one cannot help: it would block on this
+    # chapter's lock until the first finishes and then find nothing to do. The
+    # player does not need it either, since it reads segments off disk as they
+    # appear. Leave the render that is already running alone.
+    if is_rendering(chapter_id):
+        logger.info("Chapter %d is already rendering — not starting another",
+                    chapter_id)
+        return {"ready": False, "duration_seconds": None,
+                "mode": playback_mode, "already_rendering": True}
 
     # Scrape text
     try:

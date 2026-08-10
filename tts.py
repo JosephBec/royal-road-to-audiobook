@@ -408,17 +408,32 @@ def resumable_segment_count(chapter_id: int, fingerprint: dict) -> int:
     fails halfway, and then it points at work that isn't there. The filesystem
     cannot be wrong about which segments exist.
 
-    The highest segment is deliberately discarded. If the process died
-    mid-write it is a truncated WAV, and re-rendering one sentence is cheaper
-    than detecting corruption.
+    The last segment is kept only when the sidecar recorded its duration.
+    That recording happens after both the WAV and the AAC are written, so its
+    presence proves the segment finished; its absence means the process may
+    have died mid-write, and re-rendering one sentence beats detecting
+    corruption.
+
+    Discarding the last one unconditionally — the previous rule — meant every
+    press of play on a chapter with a finished head start threw a segment away
+    and rendered it again.
     """
-    if _read_sidecar(chapter_id).get("fingerprint") != fingerprint:
-        return 0  # different text, engine or voice — the audio is not ours
+    data = _read_sidecar(chapter_id)
+    if data.get("fingerprint") != fingerprint:
+        return 0  # different text, engine, voice or precision — not ours
 
     index = 0
     while _segment_path(chapter_id, index).exists():
         index += 1
-    return max(0, index - 1)
+    if index == 0:
+        return 0
+
+    last = index - 1
+    durations = data.get("durations") or []
+    complete = (last < len(durations)
+                and durations[last] is not None
+                and _aac_segment_path(chapter_id, last).exists())
+    return index if complete else last
 
 
 def _existing_segment_indices(chapter_id: int) -> list[int]:
@@ -437,6 +452,19 @@ def _existing_segment_indices(chapter_id: int) -> list[int]:
             except ValueError:
                 continue
     return sorted(indices)
+
+
+def is_rendering(chapter_id: int) -> bool:
+    """True while a render already holds this chapter's lock.
+
+    Pressing play on a chapter that is already rendering used to queue a second
+    render behind the first. It could not do anything useful — the lock makes
+    it wait, and by the time it runs the work is done — but it waits inside
+    interactive_synthesis(), so the prefetch worker keeps yielding to a task
+    that is only blocked on a lock.
+    """
+    lock = _synth_locks.get(chapter_id)
+    return lock is not None and lock.locked()
 
 
 def discard_segments_from(chapter_id: int, start_index: int):

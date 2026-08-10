@@ -71,11 +71,72 @@ def test_legacy_sidecar_without_fingerprint_is_not_resumed(temp_dir):
     assert tts.resumable_segment_count(3, _fingerprint()) == 0
 
 
-def test_single_segment_yields_nothing_reusable(temp_dir):
+def test_single_segment_is_reusable_once_recorded(temp_dir):
+    """One finished segment is still a segment worth keeping."""
     fp = _fingerprint()
     _write_segments(4, 1)
+    tts._aac_segment_path(4, 0).write_bytes(b"aac")
     tts.record_segment_duration(4, 0, 1.0, fp)
-    assert tts.resumable_segment_count(4, fp) == 0
+    assert tts.resumable_segment_count(4, fp) == 1
+
+
+def test_a_finished_head_start_is_reused_whole(temp_dir):
+    """Pressing play must not throw away the last segment and redo it.
+
+    The duration is recorded only after the WAV and the AAC are both written,
+    so a recorded segment is complete by construction. Discarding the newest
+    one unconditionally meant every play cost a re-render of one chunk.
+    """
+    fp = _fingerprint()
+    _write_segments(40, 6)
+    for index in range(6):
+        tts._aac_segment_path(40, index).write_bytes(b"aac")
+        tts.record_segment_duration(40, index, 1.0, fp)
+    assert tts.resumable_segment_count(40, fp) == 6
+
+
+def test_an_unrecorded_last_segment_is_still_dropped(temp_dir):
+    """The crash case: killed between writing the WAV and recording it."""
+    fp = _fingerprint()
+    _write_segments(41, 6)
+    for index in range(5):          # the sixth never got a duration
+        tts._aac_segment_path(41, index).write_bytes(b"aac")
+        tts.record_segment_duration(41, index, 1.0, fp)
+    assert tts.resumable_segment_count(41, fp) == 5
+
+
+def test_a_recorded_segment_missing_its_aac_is_dropped(temp_dir):
+    """The playlist serves AAC; a duration without one would advertise a 404."""
+    fp = _fingerprint()
+    _write_segments(42, 3)
+    for index in range(3):
+        tts.record_segment_duration(42, index, 1.0, fp)
+    tts._aac_segment_path(42, 0).write_bytes(b"aac")
+    tts._aac_segment_path(42, 1).write_bytes(b"aac")   # index 2 has no AAC
+    assert tts.resumable_segment_count(42, fp) == 2
+
+
+# ----- not rendering the same chapter twice -----
+
+def test_is_rendering_is_false_for_an_untouched_chapter(temp_dir):
+    assert tts.is_rendering(9999) is False
+
+
+def test_is_rendering_tracks_the_chapter_lock(temp_dir):
+    """Pressing play twice used to queue a second render behind the first,
+    which then waited inside interactive_synthesis() while only blocked on a
+    lock — so the prefetch worker kept yielding to it for nothing."""
+    import asyncio
+
+    async def check():
+        lock = tts._synth_locks.setdefault(4242, asyncio.Lock())
+        assert tts.is_rendering(4242) is False
+        async with lock:
+            assert tts.is_rendering(4242) is True
+        assert tts.is_rendering(4242) is False
+
+    asyncio.run(check())
+    tts._synth_locks.pop(4242, None)
 
 
 def test_precision_change_prevents_a_resume(temp_dir):
