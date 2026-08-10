@@ -162,6 +162,7 @@ def cleanup_temp_files(keep_ids: set[int], expiring_ids: set[int] | None = None)
     """
     expiring_ids = expiring_ids or set()
     cutoff = time.time() - RETENTION_SECONDS
+    swept: dict[int, int] = {}
     for f in _all_temp_audio_files():
         try:
             # Parse chapter id from "chapter_123.wav" or "chapter_123_seg_0.wav"
@@ -174,9 +175,15 @@ def cleanup_temp_files(keep_ids: set[int], expiring_ids: set[int] | None = None)
             if ch_id in expiring_ids and f.stat().st_mtime >= cutoff:
                 continue
             f.unlink()
-            logger.debug("Deleted temp file: %s", f.name)
+            swept[ch_id] = swept.get(ch_id, 0) + 1
         except OSError:
             pass
+    if swept:
+        # Name the chapters, not just a count. A sweep that takes the chapter
+        # you are listening to is a bug; one that takes chapters you finished
+        # days ago is the policy working, and the log has to tell them apart.
+        logger.info("Retention swept %d chapter(s): %s", len(swept),
+                    ", ".join(f"{cid} ({n} file(s))" for cid, n in sorted(swept.items())))
     # Clean streaming state for removed chapters
     for ch_id in list(_streaming_state.keys()):
         if ch_id not in keep_ids and ch_id not in expiring_ids:
@@ -434,11 +441,20 @@ def discard_segments_from(chapter_id: int, start_index: int):
     indices it actually produces — a shorter one would leave the old tail in
     place to be served as the end of the new chapter.
     """
+    removed = 0
     for index in _existing_segment_indices(chapter_id):
         if index < start_index:
             continue
         _segment_path(chapter_id, index).unlink(missing_ok=True)
         _aac_segment_path(chapter_id, index).unlink(missing_ok=True)
+        removed += 1
+    if removed:
+        # Rendered audio is expensive — twenty minutes of GPU for a chapter —
+        # so every deletion says who did it. Working out where the cache had
+        # gone otherwise means guessing between three call sites after the
+        # evidence is already gone.
+        logger.info("Chapter %d: discarded %d segment(s) from index %d",
+                    chapter_id, removed, start_index)
 
     # Keep the sidecar honest about what exists. A duration left behind for a
     # deleted segment is what makes a playlist advertise audio that 404s.
