@@ -163,9 +163,15 @@ async def head_start_pass():
         targets = []
         for novel in db.query(Novel).filter(Novel.archived.is_(False)).all():
             prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
-            if not prog or not prog.chapter_id:
-                continue
-            chapter = db.query(Chapter).filter(Chapter.id == prog.chapter_id).first()
+            if prog and prog.chapter_id:
+                chapter = db.query(Chapter).filter(Chapter.id == prog.chapter_id).first()
+            else:
+                # Never opened: the chapter you would press play on is the
+                # first one. Skipping these meant a brand-new novel was the
+                # one case guaranteed to pay the full cold-start cost.
+                chapter = (db.query(Chapter)
+                           .filter(Chapter.novel_id == novel.id)
+                           .order_by(Chapter.order).first())
             if chapter is None or tts.temp_path_for_chapter(chapter.id).exists():
                 continue  # already rendered in full; nothing to get ahead of
             eff = effective_settings(novel, settings)

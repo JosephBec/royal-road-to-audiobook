@@ -418,6 +418,11 @@ async def get_hls_playlist(chapter_id: int, db: Session = Depends(get_db)):
         f"#EXT-X-TARGETDURATION:{math.ceil(max(durations)) + 1}",
         "#EXT-X-MEDIA-SEQUENCE:0",
         "#EXT-X-PLAYLIST-TYPE:EVENT",
+        # Safari starts a still-growing playlist at its live edge even when it
+        # is typed EVENT — playing a fresh chapter dropped you minutes in,
+        # wherever rendering happened to have reached. Say explicitly that the
+        # stream begins at zero.
+        "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES",
     ]
     for i, dur in enumerate(durations):
         lines.append(f"#EXTINF:{dur:.3f},")

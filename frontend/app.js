@@ -893,6 +893,35 @@ async function playInstantHls(chapterId) {
     state.audio.src = `/api/chapters/${chapterId}/hls.m3u8`;
     applyPlaybackRate();
     state.audio.load();
+
+    // Safari starts a growing HLS playlist near its live edge, so a fresh
+    // chapter began wherever rendering had reached. Place the playhead
+    // ourselves once metadata lands — at the saved position if this is a
+    // resume, otherwise at the beginning.
+    let startAt = 0;
+    try {
+        const novelId = state.playback.novel?.id;
+        if (novelId) {
+            const progress = await api('GET', `/api/progress/${novelId}`);
+            if (progress.chapter_id === chapterId && progress.position_seconds > 0) {
+                startAt = progress.position_seconds;
+            }
+        }
+    } catch (e) {}
+
+    await new Promise(resolve => {
+        if (state.audio.readyState >= 1) return resolve();
+        const done = () => { state.audio.removeEventListener('loadedmetadata', done); resolve(); };
+        state.audio.addEventListener('loadedmetadata', done);
+        setTimeout(done, 3000);   // don't hang if metadata never arrives
+    });
+    if (state.playback.chapter?.id !== chapterId) return;
+    try {
+        const seekable = state.audio.seekable;
+        const end = seekable && seekable.length ? seekable.end(seekable.length - 1) : 0;
+        state.audio.currentTime = Math.max(0, Math.min(startAt, Math.max(0, end - 1)));
+    } catch (e) {}
+
     try {
         await state.audio.play();
     } catch (e) {}

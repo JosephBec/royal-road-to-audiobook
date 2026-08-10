@@ -268,3 +268,52 @@ def test_foreground_render_does_not_yield(fake_engine, temp_dir, monkeypatch):
     monkeypatch.setattr(tts, "interactive_busy", lambda: True)
     asyncio.run(tts.synthesize_chapter_streaming(41, TEXT, "cb_yearsley", 1.0, "chatterbox"))
     assert len(fake_engine.rendered) == 6
+
+
+def test_head_start_covers_a_never_opened_novel(monkeypatch, temp_dir):
+    """A novel with no saved progress is the one guaranteed to be cold.
+
+    Requiring a progress row meant the first play of a brand-new book always
+    paid the full model-load cost — exactly the case the head start exists for.
+    """
+    import asyncio
+    import database
+    import prefetch
+
+    database.init_db()   # this module doesn't use the app fixture
+    db = database.SessionLocal()
+    novel = database.Novel(title="Never Opened", rr_url="https://example.com/fiction/7777/x")
+    db.add(novel)
+    db.flush()
+    for order in (1, 2):
+        db.add(database.Chapter(
+            novel_id=novel.id, title=f"Chapter {order}", order=order,
+            rr_url=f"https://example.com/fiction/7777/x/chapter/{order}",
+            text="Some body text for the chapter."))
+    db.commit()
+    novel_id = novel.id
+    first_id = (db.query(database.Chapter)
+                .filter(database.Chapter.novel_id == novel_id)
+                .order_by(database.Chapter.order).first().id)
+    db.close()
+
+    started = []
+
+    async def fake_stream(chapter_id, text, voice, speed, engine_name,
+                          chunk_voices=None, max_seconds=None, **kw):
+        started.append((chapter_id, max_seconds))
+
+    monkeypatch.setattr(prefetch.tts, "synthesize_chapter_streaming", fake_stream)
+    monkeypatch.setattr(prefetch.tts, "temp_path_for_chapter",
+                        lambda cid: temp_dir / f"absent_{cid}.wav")
+
+    asyncio.run(prefetch.head_start_pass())
+
+    assert first_id in [c for c, _ in started], \
+        "the first chapter of an unopened novel should get a head start"
+    assert all(m == prefetch.HEAD_START_SECONDS for _, m in started)
+
+    db = database.SessionLocal()
+    db.delete(db.query(database.Novel).filter(database.Novel.id == novel_id).first())
+    db.commit()
+    db.close()
