@@ -1761,6 +1761,7 @@ function openPronunciation() {
     document.getElementById('rule-preview-out').innerHTML = '';
     switchPronTab('scan');
     loadRules();
+    refreshTextCoverage();
     document.getElementById('modal-pronunciation').style.display = 'flex';
 }
 
@@ -1959,6 +1960,91 @@ async function saveRule() {
     } catch (e) {
         showToast('Could not save: ' + e.message);
     }
+}
+
+
+// ===== Text backfill =====
+//
+// Chapter text is only stored as a side effect of playing or prefetching, so
+// everything behind your position was never fetched. Scanning a whole novel
+// for pronunciation should not require listening to it first. Text is about
+// 20 KB a chapter, so caching a whole book costs a few megabytes.
+
+let backfillPoll = null;
+
+function formatBytes(n) {
+    if (!n) return '0 KB';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function refreshTextCoverage() {
+    const el = document.getElementById('pron-coverage');
+    if (!el || !state.currentNovel) return;
+    try {
+        const d = await api('GET', '/api/novels/' + state.currentNovel.id + '/text-coverage');
+        const btn = document.getElementById('btn-fetch-text');
+        if (d.missing === 0) {
+            el.textContent = 'All ' + d.total_chapters + ' chapters have text ('
+                + formatBytes(d.cached_bytes) + ').';
+            if (btn) btn.style.display = 'none';
+        } else {
+            const projected = d.estimated_full_bytes
+                ? ', about ' + formatBytes(d.estimated_full_bytes) + ' for the whole novel'
+                : '';
+            el.textContent = d.cached + ' of ' + d.total_chapters
+                + ' chapters have text' + projected + '.';
+            if (btn) btn.style.display = '';
+        }
+    } catch (e) {
+        el.textContent = '';
+    }
+}
+
+async function startTextBackfill() {
+    if (!state.currentNovel) return;
+    const start = parseInt(document.getElementById('pron-start').value, 10) || null;
+    const end = parseInt(document.getElementById('pron-end').value, 10) || null;
+    try {
+        await api('POST', '/api/novels/' + state.currentNovel.id + '/fetch-text',
+                  { start_order: start, end_order: end });
+        showToast('Fetching chapter text in the background');
+        pollBackfill();
+    } catch (e) {
+        showToast('Could not start: ' + e.message);
+    }
+}
+
+function pollBackfill() {
+    if (backfillPoll) clearInterval(backfillPoll);
+    const el = document.getElementById('pron-backfill-status');
+    backfillPoll = setInterval(async function () {
+        try {
+            const s = await api('GET', '/api/text-backfill/status');
+            if (!s.running) {
+                clearInterval(backfillPoll);
+                backfillPoll = null;
+                el.textContent = s.total
+                    ? 'Fetched ' + s.done + ' chapter(s)'
+                        + (s.failed ? ', ' + s.failed + ' failed' : '') + '.'
+                    : '';
+                refreshTextCoverage();
+                return;
+            }
+            el.textContent = s.novel + ': ' + s.done + ' of ' + s.total
+                + (s.failed ? ' (' + s.failed + ' failed)' : '');
+        } catch (e) {
+            clearInterval(backfillPoll);
+            backfillPoll = null;
+        }
+    }, 1500);
+}
+
+async function cancelTextBackfill() {
+    try {
+        await api('POST', '/api/text-backfill/cancel');
+        showToast('Backfill cancelled');
+    } catch (e) { /* nothing running */ }
 }
 
 // ===== Drag-to-reorder =====
@@ -2411,6 +2497,8 @@ function setupEventListeners() {
     document.querySelectorAll('.pron-tab').forEach(b =>
         b.addEventListener('click', () => switchPronTab(b.dataset.ptab)));
     document.getElementById('btn-pron-scan').addEventListener('click', scanPronunciation);
+    document.getElementById('btn-fetch-text').addEventListener('click', startTextBackfill);
+    document.getElementById('btn-fetch-cancel').addEventListener('click', cancelTextBackfill);
     document.getElementById('btn-rule-preview').addEventListener('click', previewRule);
     document.getElementById('btn-rule-save').addEventListener('click', saveRule);
 

@@ -251,3 +251,63 @@ async def speak_phrase(req: SpeakRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=502, detail="Produced no audio")
         sf.write(str(out), np.concatenate(segments), impl.sample_rate, subtype="PCM_16")
     return FileResponse(str(out), media_type="audio/wav", filename="phrase.wav")
+
+
+# ===== text backfill =====
+
+class BackfillRequest(BaseModel):
+    start_order: int | None = None
+    end_order: int | None = None
+
+
+@router.post("/novels/{novel_id}/fetch-text")
+async def start_text_backfill(novel_id: int, req: BackfillRequest,
+                              db: Session = Depends(get_db)):
+    """Fetch and cache text for chapters that don't have it yet.
+
+    Text is only stored as a side effect of playing or prefetching, so
+    anything behind your position was never fetched. Scanning a whole novel
+    for pronunciation shouldn't require listening to it first.
+    """
+    import text_backfill
+
+    if not db.query(Novel).filter(Novel.id == novel_id).first():
+        raise HTTPException(status_code=404, detail="Novel not found")
+    result = text_backfill.start(novel_id, req.start_order, req.end_order)
+    if not result["started"]:
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
+
+
+@router.get("/text-backfill/status")
+async def text_backfill_status():
+    import text_backfill
+    return text_backfill.status()
+
+
+@router.post("/text-backfill/cancel")
+async def cancel_text_backfill():
+    import text_backfill
+    text_backfill.cancel()
+    return text_backfill.status()
+
+
+@router.get("/novels/{novel_id}/text-coverage")
+async def text_coverage(novel_id: int, db: Session = Depends(get_db)):
+    """How much of this novel has text cached, and roughly how large it is."""
+    if not db.query(Novel).filter(Novel.id == novel_id).first():
+        raise HTTPException(status_code=404, detail="Novel not found")
+    total = db.query(Chapter).filter(Chapter.novel_id == novel_id).count()
+    rows = db.query(Chapter).filter(Chapter.novel_id == novel_id,
+                                    Chapter.text.isnot(None)).all()
+    cached = len(rows)
+    size = sum(len(c.text or "") for c in rows)
+    average = (size / cached) if cached else 0
+    return {
+        "total_chapters": total,
+        "cached": cached,
+        "missing": total - cached,
+        "cached_bytes": size,
+        # Rough, based on this novel's own chapters rather than a guess.
+        "estimated_full_bytes": int(average * total) if cached else None,
+    }

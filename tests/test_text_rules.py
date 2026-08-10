@@ -125,3 +125,45 @@ def test_preview_caps_the_examples_returned():
     count, examples = tr.preview(text, "roman", r"(\w+) ([IVXL]+)", r"\1 tier \2")
     assert count == 30
     assert len(examples) <= 8
+
+
+# ----- text backfill -----
+
+def test_backfill_targets_only_chapters_without_text():
+    """Refetching a chapter that already has text wastes a request on someone
+    else's server for no benefit."""
+    import database, text_backfill
+    database.init_db()
+    db = database.SessionLocal()
+    novel = database.Novel(title="Backfill Test",
+                           rr_url="https://example.com/fiction/8888/b")
+    db.add(novel); db.flush()
+    for order in (1, 2, 3):
+        db.add(database.Chapter(
+            novel_id=novel.id, title=f"C{order}", order=order,
+            rr_url=f"https://example.com/fiction/8888/b/chapter/{order}",
+            text="already here" if order == 2 else None))
+    db.commit()
+
+    pending = text_backfill._pending_chapters(db, novel.id, None, None)
+    assert [c.order for c in pending] == [1, 3]
+
+    ranged = text_backfill._pending_chapters(db, novel.id, 3, None)
+    assert [c.order for c in ranged] == [3]
+
+    db.delete(db.query(database.Novel).filter(database.Novel.id == novel.id).first())
+    db.commit(); db.close()
+
+
+def test_backfill_refuses_to_start_while_one_is_running(monkeypatch):
+    """Two concurrent backfills would double the request rate at the source."""
+    import text_backfill
+
+    class FakeTask:
+        def done(self):
+            return False
+
+    monkeypatch.setattr(text_backfill, "_task", FakeTask())
+    result = text_backfill.start(1, None, None)
+    assert result["started"] is False
+    assert "already running" in result["reason"]
