@@ -173,3 +173,50 @@ def test_rebuild_is_idempotent(db, tmp_path):
 
     assert chapter_repair.rebuild_epub_chapters(
         db, Chapter, Progress, novel, parsed, filename, epub_local.chapter_url) is None
+
+
+# ----- multi-document chapters (regression: 38% of a book was dropped) -----
+
+def test_chapter_spanning_several_documents_is_kept_whole(tmp_path):
+    """A chapter split across files must be joined, not truncated to its first.
+
+    Real books do this constantly — one title had 19 chapters across 74 spine
+    documents. Requiring each document to carry its own numbered TOC label
+    discarded every continuation page while still reporting a plausible
+    chapter count, which is the worst kind of failure: silent.
+    """
+    path = make_epub(tmp_path / "multi.epub", chapters=[
+        ("1. Opening", [LONG_PARA]),
+        ("", [LONG_PARA]),            # continuation, no TOC entry of its own
+        ("", [LONG_PARA]),            # another continuation
+        ("2. Second", [LONG_PARA]),
+        ("", [LONG_PARA]),
+        ("3. Third", [LONG_PARA]),
+    ])
+    parsed = parse_epub_file(path)
+    assert [c.number for c in parsed.chapters] == [1, 2, 3]
+    # Chapter 1 owns its two continuations, so it is three paragraphs long.
+    assert parsed.chapters[0].word_count > parsed.chapters[2].word_count * 2
+
+
+def test_no_text_is_lost_across_numbered_chapters(tmp_path):
+    path = make_epub(tmp_path / "keep.epub", chapters=[
+        ("1. One", [LONG_PARA]), ("", [LONG_PARA]),
+        ("2. Two", [LONG_PARA]), ("", [LONG_PARA]),
+        ("3. Three", [LONG_PARA]),
+    ])
+    parsed = parse_epub_file(path)
+    words_per_para = len(LONG_PARA.split())
+    assert sum(c.word_count for c in parsed.chapters) >= words_per_para * 5
+
+
+def test_image_only_documents_yield_no_chapter(tmp_path):
+    """Scanned pages have no extractable text; they must not become empty
+    chapters that render as silence."""
+    path = make_epub(tmp_path / "img.epub", chapters=[
+        ("1. Real", [LONG_PARA]),
+        ("2. Scanned", ['<img src="p1.jpg"/><img src="p2.jpg"/>']),
+        ("3. Real Again", [LONG_PARA]),
+    ])
+    parsed = parse_epub_file(path)
+    assert [c.number for c in parsed.chapters] == [1, 3]

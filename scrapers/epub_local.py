@@ -279,6 +279,93 @@ def extract_cover_image(book: epub.EpubBook) -> tuple[bytes | None, str]:
     return None, "jpg"
 
 
+def _read_document(item) -> str | None:
+    try:
+        return item.get_content().decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.warning("Failed to decode item %s: %s", item.get_name(), e)
+        return None
+
+
+def _chapters_from_toc(documents, labels, min_chapter_words) -> list[ParsedChapter]:
+    """Build chapters using TOC entries as boundaries, not as filters.
+
+    A numbered TOC entry starts a chapter; an unnumbered one (a part heading,
+    the introduction, endnotes) ends the current chapter without starting a
+    new one; a document with no entry at all is a continuation of whichever
+    chapter is open.
+
+    That last rule is the important one. Books routinely split a single
+    chapter across many spine documents — one title here had 19 chapters
+    spread over 74 files — and treating "has a numbered label" as the test for
+    inclusion silently discarded every continuation page, losing nearly 40% of
+    the text while still reporting a plausible chapter count.
+    """
+    # Read every document once, tagged with its TOC label.
+    entries = []
+    for item in documents:
+        content = _read_document(item)
+        if content is None:
+            continue
+        label = _match_label(labels, item.get_name())
+        entries.append({
+            "content": content,
+            "text": clean_html_to_text(content),
+            "label": label,
+            "number": chapter_number_from_label(label) if label else None,
+        })
+
+    starts = [i for i, e in enumerate(entries) if e["number"] is not None]
+    if not starts:
+        return []
+
+    chapters: list[ParsedChapter] = []
+    for position, start in enumerate(starts):
+        # A chapter owns every document up to the next numbered entry. Slicing
+        # positionally is what makes multi-document chapters work; testing each
+        # document for a label of its own discarded the continuations.
+        end = starts[position + 1] if position + 1 < len(starts) else len(entries)
+        if position + 1 == len(starts):
+            # Last chapter: stop at the first labelled entry after it, so
+            # endnotes and indexes don't get swallowed into the final chapter.
+            for i in range(start + 1, len(entries)):
+                if entries[i]["label"] is not None:
+                    end = i
+                    break
+
+        body = "\n\n".join(e["text"] for e in entries[start:end] if e["text"])
+        if len(body.split()) < min_chapter_words:
+            continue
+        chapters.append(ParsedChapter(
+            title=extract_chapter_title(entries[start]["content"], entries[start]["label"]),
+            text=body,
+            index=len(chapters),
+            number=entries[start]["number"],
+        ))
+    return chapters
+
+
+def _chapters_from_word_count(documents, labels, min_chapter_words) -> list[ParsedChapter]:
+    """Fallback for books whose TOC doesn't number anything: every substantial
+    spine document is a chapter, which is how this parser always worked."""
+    chapters: list[ParsedChapter] = []
+    for item in documents:
+        content = _read_document(item)
+        if content is None:
+            continue
+        text = clean_html_to_text(content)
+        if len(text.split()) < min_chapter_words:
+            continue  # cover page, TOC, copyright, etc.
+        label = _match_label(labels, item.get_name()) if labels else None
+        chapters.append(ParsedChapter(
+            title=extract_chapter_title(content, label or f"Chapter {len(chapters) + 1}"),
+            text=text,
+            index=len(chapters),
+            number=None,
+        ))
+    return chapters
+
+
 def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> ParsedBook:
     """Parse an EPUB into metadata + chapters. Raises on missing/broken files
     and on books with no extractable chapters."""
@@ -320,33 +407,10 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
     )
     use_toc = numbered_labels >= 3
 
-    index = 0
-    for item in documents:
-        try:
-            content = item.get_content().decode("utf-8", errors="replace")
-        except Exception as e:
-            logger.warning("Failed to decode item %s: %s", item.get_name(), e)
-            continue
-        text = clean_html_to_text(content)
-        if len(text.split()) < min_chapter_words:
-            continue  # cover page, TOC, copyright, etc.
-
-        label = _match_label(labels, item.get_name()) if labels else None
-        number = chapter_number_from_label(label) if label else None
-        if use_toc and number is None:
-            # The TOC numbers its chapters and this document isn't one of them:
-            # a dedication, author's note, glossary or "Also in Series" page.
-            # Counting these is what shifted every chapter number.
-            logger.debug("Skipping front/back matter: %s (%r)", item.get_name(), label)
-            continue
-
-        parsed.chapters.append(ParsedChapter(
-            title=extract_chapter_title(content, label or f"Chapter {index + 1}"),
-            text=text,
-            index=index,
-            number=number,
-        ))
-        index += 1
+    if use_toc:
+        parsed.chapters = _chapters_from_toc(documents, labels, min_chapter_words)
+    else:
+        parsed.chapters = _chapters_from_word_count(documents, labels, min_chapter_words)
 
     if not parsed.chapters:
         raise ValueError(f"No chapters with sufficient content found in: {path.name}")
