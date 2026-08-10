@@ -152,8 +152,8 @@ def test_render_ahead_uses_the_resumable_path(pf_env):
     assert resumable_args["yield_to_interactive"] is True
 
 
-def test_head_start_is_skipped_when_nothing_is_queued(pf_env, monkeypatch):
-    """An idle worker must not spin the GPU up on every wake."""
+def test_drain_once_does_nothing_when_nothing_is_queued(pf_env, monkeypatch):
+    """drain_once is the queued-work path; the idle sweep is the worker loop's."""
     prefetch, _, _, _, _ = pf_env
     calls = []
 
@@ -163,6 +163,57 @@ def test_head_start_is_skipped_when_nothing_is_queued(pf_env, monkeypatch):
 
     asyncio.run(prefetch.drain_once())
     assert calls == []
+
+
+def test_idle_worker_runs_the_head_start(pf_env, monkeypatch):
+    """Nothing enqueues on a quiet server.
+
+    Waiting only on the queue parked the worker indefinitely, so the head
+    start never ran until something else happened to queue work — and idle
+    time is exactly when it should be running, since its whole purpose is to
+    have the opening ready before play is pressed.
+    """
+    prefetch, _, _, _, _ = pf_env
+    calls = []
+
+    async def fake_head_start():
+        calls.append(1)
+        if len(calls) >= 2:
+            raise asyncio.CancelledError  # let the loop exit
+    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+    monkeypatch.setattr(prefetch, "IDLE_TICK_SECONDS", 0.01)
+
+    async def run():
+        with pytest.raises(asyncio.CancelledError):
+            await prefetch._worker_loop()
+    asyncio.run(run())
+
+    assert len(calls) == 2, "idle worker should sweep on every tick"
+
+
+def test_head_start_skips_a_chapter_that_already_has_one(pf_env, monkeypatch):
+    """The idle sweep must be free for chapters already done.
+
+    Re-entering the render to discover there is nothing to do is not free:
+    resuming deliberately drops the last segment as possibly truncated, so
+    every tick would discard a segment and render it again.
+    """
+    prefetch, tts, _, _, _ = pf_env
+    fp = {"text": "t", "engine": "chatterbox", "voice": "v", "chunks": 3}
+    for index, seconds in enumerate((60.0, 60.0, 30.0)):
+        tts.record_segment_duration(99, index, seconds, fp)
+
+    assert prefetch._head_start_satisfied(99) is True
+    assert prefetch._head_start_satisfied(1234) is False  # nothing on disk
+
+
+def test_head_start_not_satisfied_by_a_partial_opening(pf_env):
+    """Half a head start is not a head start; the sweep should finish it."""
+    prefetch, tts, _, _, _ = pf_env
+    fp = {"text": "t", "engine": "chatterbox", "voice": "v", "chunks": 2}
+    tts.record_segment_duration(98, 0, 30.0, fp)
+
+    assert prefetch._head_start_satisfied(98) is False
 
 
 def test_is_busy_false_after_drain(pf_env):

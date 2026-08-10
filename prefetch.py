@@ -174,6 +174,22 @@ async def _process_one(item: tuple):
 # worst moment in the whole experience; this pays that cost in advance.
 HEAD_START_SECONDS = 120
 
+# How long the worker waits for queued work before doing a head-start sweep.
+IDLE_TICK_SECONDS = 120
+
+
+def _head_start_satisfied(chapter_id: int) -> bool:
+    """True when this chapter already holds its opening on disk.
+
+    The idle sweep runs every couple of minutes, so it has to be free for
+    chapters that are already done. Without this the render would be re-entered
+    to discover it has nothing to do — and resuming deliberately drops the last
+    segment as possibly-truncated, so each tick would throw away a segment and
+    render it again forever.
+    """
+    durations = tts._read_sidecar(chapter_id).get("durations") or []
+    return sum(d for d in durations if d) >= HEAD_START_SECONDS
+
 
 async def head_start_pass():
     """Render the opening of each active novel's current chapter.
@@ -201,6 +217,8 @@ async def head_start_pass():
                            .order_by(Chapter.order).first())
             if chapter is None or tts.temp_path_for_chapter(chapter.id).exists():
                 continue  # already rendered in full; nothing to get ahead of
+            if _head_start_satisfied(chapter.id):
+                continue  # opening already on disk
             eff = effective_settings(novel, settings)
             targets.append((chapter.id, chapter.rr_url, chapter.title,
                             eff["voice"], eff["engine"]))
@@ -253,7 +271,17 @@ async def _worker_loop():
     while True:
         # Block for the first item, then drain the rest as a batch so cleanup
         # runs once per burst rather than per chapter.
-        first = await queue.get()
+        #
+        # Waking on a timeout matters as much as waking on an item. Nothing
+        # enqueues on a quiet server, so a plain get() left the worker parked
+        # forever and the head start — the entire reason a chapter can start
+        # instantly — never ran until something else happened to queue work.
+        # Idle time is when that job should be running, not when it stops.
+        try:
+            first = await asyncio.wait_for(queue.get(), timeout=IDLE_TICK_SECONDS)
+        except asyncio.TimeoutError:
+            await head_start_pass()
+            continue
 
         # Head start before render-ahead, not after it.
         #
