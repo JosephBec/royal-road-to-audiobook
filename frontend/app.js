@@ -1118,6 +1118,7 @@ function setupAudioEvents() {
         state.isPlaying = true;
         document.getElementById('btn-play-pause').textContent = '⏸';
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        stopSilentKeepalive();
         updatePositionState();
     });
 
@@ -1127,6 +1128,9 @@ function setupAudioEvents() {
             document.getElementById('btn-play-pause').textContent = '▶';
         }
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        // Hold the audio session open so the lock-screen play button keeps
+        // working after the first few seconds.
+        startSilentKeepalive();
         saveProgress();
     });
 
@@ -1238,6 +1242,66 @@ function updateMediaSession() {
             updatePositionState();
         });
     } catch (e) { /* seekto unsupported on this browser */ }
+}
+
+// ===== Keeping the iOS lock-screen session alive =====
+//
+// Safari deactivates the audio session a few seconds after a pause. Once it
+// has, the Now Playing controls stop routing to this page: play does nothing,
+// which is why resume only works if you press it almost immediately.
+//
+// Two mitigations. Re-registering on wake is free and always on. The silent
+// keepalive genuinely holds the session open but costs a trickle of battery,
+// so it is opt-in and stored per device — it only matters on iOS.
+
+const KEEPALIVE_KEY = 'iosKeepSessionAlive';
+let silentLoop = null;
+
+function keepaliveEnabled() {
+    return localStorage.getItem(KEEPALIVE_KEY) === '1';
+}
+
+function silentWavUrl() {
+    // A tiny silent WAV, built rather than shipped as a base64 blob so it is
+    // obvious what it is. 0.25s of 8kHz 8-bit silence.
+    const samples = 2000, headerLength = 44;
+    const buffer = new ArrayBuffer(headerLength + samples);
+    const view = new DataView(buffer);
+    const ascii = (offset, text) => {
+        for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+    };
+    ascii(0, 'RIFF'); view.setUint32(4, 36 + samples, true); ascii(8, 'WAVE');
+    ascii(12, 'fmt '); view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
+    view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+    ascii(36, 'data'); view.setUint32(40, samples, true);
+    for (let i = 0; i < samples; i++) view.setUint8(headerLength + i, 128); // 8-bit silence
+    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
+
+function startSilentKeepalive() {
+    if (!keepaliveEnabled()) return;
+    if (!silentLoop) {
+        silentLoop = new Audio(silentWavUrl());
+        silentLoop.loop = true;
+        silentLoop.volume = 0;
+    }
+    silentLoop.play().catch(() => {});   // blocked before any user gesture; harmless
+}
+
+function stopSilentKeepalive() {
+    if (silentLoop) silentLoop.pause();
+}
+
+function reviveMediaSession() {
+    // Handlers and metadata can be dropped when the page is frozen and thawed.
+    if (!state.playback.chapter) return;
+    updateMediaSession();
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = state.isPlaying ? 'playing' : 'paused';
+    }
+    updatePositionState();
 }
 
 function updatePositionState() {
@@ -1369,6 +1433,7 @@ function openSettings() {
 
     // Auto-play
     document.getElementById('setting-autoplay').checked = state.settings.auto_play;
+    document.getElementById('setting-keepalive').checked = keepaliveEnabled();
 
     // Theme
     document.getElementById('setting-theme').value = state.settings.theme;
@@ -2018,6 +2083,22 @@ function setupEventListeners() {
     });
     document.getElementById('ns-speed-reset').addEventListener('click', () => {
         updateNovelSetting('speed', null);
+    });
+
+    // iOS freezes backgrounded pages; handlers and metadata can be lost on
+    // thaw, so re-establish them whenever we come back.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reviveMediaSession();
+    });
+    window.addEventListener('pageshow', reviveMediaSession);
+
+    document.getElementById('setting-keepalive').addEventListener('change', (e) => {
+        localStorage.setItem(KEEPALIVE_KEY, e.target.checked ? '1' : '0');
+        if (e.target.checked && !state.isPlaying) startSilentKeepalive();
+        if (!e.target.checked) stopSilentKeepalive();
+        showToast(e.target.checked
+            ? 'Lock-screen controls will stay active while paused'
+            : 'Lock-screen keepalive off');
     });
 
     // Settings
