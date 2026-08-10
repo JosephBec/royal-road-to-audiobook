@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Iterator, TYPE_CHECKING
@@ -41,6 +42,17 @@ MAX_CHUNK_CHARS = 300
 # reads as a deliberate beat rather than a stumble.
 DEFAULT_SENTENCE_PAUSE = 0.7
 SETTINGS_FILENAME = "voice_settings.json"
+# Run the transformer's weights in fp16. Measured on an RTX 2070: 3.28 GB ->
+# 2.42 GB, with an 8% speedup that is not the reason to do it — the VRAM is.
+# Whisper transcribed fp16 and fp32 renders of the same four sentences to
+# identical text, so this is not a quality trade.
+#
+# Set CHATTERBOX_FP32=1 to turn it off without touching code. The conversion
+# also self-checks at load and falls back on its own, so this is an override
+# rather than the safety net.
+HALF_PRECISION = os.environ.get("CHATTERBOX_FP32", "").strip().lower() not in (
+    "1", "true", "yes", "on")
+
 # The model asserts on reference audio of 5s or less.
 MIN_REFERENCE_SECONDS = 5.0
 REFERENCE_SUFFIXES = (".wav", ".mp3", ".flac", ".ogg", ".m4a")
@@ -89,6 +101,7 @@ class ChatterboxEngine(TTSEngine):
         self._builtin_conds = None
         self._conds_cache: dict[str, object] = {}
         self._active_voice: str | None = None
+        self._half = False
 
     def available(self) -> tuple[bool, str]:
         try:
@@ -204,6 +217,90 @@ class ChatterboxEngine(TTSEngine):
         self._active_voice = BUILTIN_VOICE_ID
         logger.info("Chatterbox-Turbo initialized (device=%s, sr=%d)", device, self._model.sr)
 
+        if device == "cuda" and HALF_PRECISION:
+            self._try_half_precision()
+
+    # ----- fp16 -----
+
+    def _cast_conds(self, conds) -> None:
+        """Match the conditioning tensors to the transformer's dtype.
+
+        The weights and their inputs have to agree; converting only the module
+        fails at the first matmul with "mat1 and mat2 must have the same dtype".
+        """
+        import torch
+
+        t3_cond = getattr(conds, "t3", None)
+        if t3_cond is None:
+            return
+        for field in getattr(t3_cond, "__dataclass_fields__", {}):
+            value = getattr(t3_cond, field, None)
+            if torch.is_tensor(value) and value.dtype == torch.float32:
+                setattr(t3_cond, field, value.half())
+
+    def _half_output_is_sane(self) -> bool:
+        """Render something real and check it is actually audio.
+
+        fp16 tops out at 65504, and an activation past that becomes inf, then
+        NaN, then silence or noise. That failure is invisible until you listen,
+        so prove it here instead — on the model, not on a toy tensor.
+        """
+        import numpy as np
+
+        wav = self._model.generate("The quick brown fox jumps over the lazy dog.")
+        audio = wav.squeeze(0).detach().cpu().numpy()
+        if audio.size == 0 or not np.isfinite(audio).all():
+            return False
+        rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+        return rms > 1e-3      # not silence
+
+    def _try_half_precision(self) -> None:
+        """Run the transformer in fp16, or fall back to a clean fp32 model.
+
+        Worth ~0.9 GB of VRAM on an 8 GB card, which is the point — the speed
+        difference measured only 8%. t3 is the autoregressive stage and holds
+        most of the parameters; s3gen is left alone because it runs once per
+        chunk rather than once per token.
+
+        A half-applied conversion is worse than none: the module would be fp16
+        with fp32 inputs and every render would fail. So the recovery path
+        throws the model away and reloads rather than trying to undo it.
+        """
+        import torch
+
+        try:
+            self._model.t3 = self._model.t3.half()
+            self._cast_conds(self._builtin_conds)
+            self._model.conds = self._builtin_conds
+            if not self._half_output_is_sane():
+                raise RuntimeError("fp16 produced unusable audio")
+        except Exception:
+            logger.exception("fp16 conversion failed — reloading Chatterbox in fp32")
+            self._half = False
+            self._reload_fp32()
+            return
+
+        self._half = True
+        logger.info("Chatterbox transformer in fp16 (%.2f GB allocated)",
+                    torch.cuda.memory_allocated() / 1e9)
+
+    def _reload_fp32(self) -> None:
+        import gc
+
+        import torch
+        from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+        self._model = None
+        self._builtin_conds = None
+        self._conds_cache.clear()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        self._model = ChatterboxTurboTTS.from_pretrained(device="cuda")
+        self._builtin_conds = self._model.conds
+        self._active_voice = BUILTIN_VOICE_ID
+        logger.info("Chatterbox-Turbo reloaded in fp32.")
+
     def _apply_voice(self, voice_id: str) -> None:
         """Point the model at the requested voice, preparing conditionals once.
 
@@ -229,10 +326,17 @@ class ChatterboxEngine(TTSEngine):
         if conds is None:
             self._model.prepare_conditionals(str(voice.source_path))
             conds = self._model.conds
+            # Freshly prepared conditionals are fp32; the transformer may not be.
+            if self._half:
+                self._cast_conds(conds)
             self._conds_cache[key] = conds
             logger.info("Prepared Chatterbox conditionals for %s", voice.id)
         self._model.conds = conds
         self._active_voice = voice_id
+
+    @property
+    def precision(self) -> str:
+        return "fp16" if self._half else "fp32"
 
     def plan_chunks(self, text: str) -> list[str]:
         # Each sentence is already an independent generate() call, so these are
@@ -258,6 +362,7 @@ class ChatterboxEngine(TTSEngine):
         self._builtin_conds = None
         self._conds_cache.clear()
         self._active_voice = None
+        self._half = False
         try:
             import torch
             torch.cuda.empty_cache()

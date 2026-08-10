@@ -78,6 +78,28 @@ def test_single_segment_yields_nothing_reusable(temp_dir):
     assert tts.resumable_segment_count(4, fp) == 0
 
 
+def test_precision_change_prevents_a_resume(temp_dir):
+    """fp16 and fp32 do the same arithmetic to different numbers of digits.
+
+    These models sample, so a tiny numeric difference can select a different
+    token. Resuming an fp32 render in fp16 would splice two subtly different
+    voices into one chapter — audible exactly once, halfway through.
+    """
+    fp32 = tts.render_fingerprint("body", "chatterbox", "cb_yearsley", 10, "fp32")
+    fp16 = tts.render_fingerprint("body", "chatterbox", "cb_yearsley", 10, "fp16")
+    assert fp32 != fp16
+
+    _write_segments(30, 5)
+    tts.record_segment_duration(30, 0, 1.0, fp32)
+    assert tts.resumable_segment_count(30, fp32) == 4
+    assert tts.resumable_segment_count(30, fp16) == 0
+
+
+def test_precision_defaults_to_fp32(temp_dir):
+    """Engines that never declare a precision keep their existing identity."""
+    assert tts.render_fingerprint("b", "kokoro", "af_heart", 3)["precision"] == "fp32"
+
+
 # ----- discarding the stale tail -----
 
 def test_discard_removes_segments_at_and_after_index(temp_dir):

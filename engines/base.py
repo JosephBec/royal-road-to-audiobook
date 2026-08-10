@@ -113,6 +113,17 @@ class TTSEngine:
         """Load model weights. Blocking; called once on the TTS worker thread."""
         raise NotImplementedError
 
+    @property
+    def precision(self) -> str:
+        """Numeric precision the model is running at, e.g. "fp32" or "fp16".
+
+        Part of a render's identity. Changing it changes the arithmetic, and
+        because these models sample, slightly different arithmetic can pick a
+        different token — so audio produced at one precision must not be
+        resumed at another, or a chapter could shift voice halfway through.
+        """
+        return "fp32"
+
     def plan_chunks(self, text: str) -> list[str]:
         """Split text into independently-synthesizable pieces.
 

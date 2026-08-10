@@ -317,13 +317,19 @@ def _segment_index_path(chapter_id: int) -> Path:
     return TEMP_DIR / f"chapter_{chapter_id}_segments.json"
 
 
-def render_fingerprint(text: str, engine_name: str, voice: str, chunk_count: int) -> dict:
+def render_fingerprint(text: str, engine_name: str, voice: str, chunk_count: int,
+                       precision: str = "fp32") -> dict:
     """Identity of a render, so partial work is only resumed when it still applies.
 
     The sentence pause is deliberately absent: it is applied when segments are
     assembled, not baked into them, so changing it does not invalidate audio
     already on disk. Everything else here does — a re-scrape changes the
     sentences, and a different engine or voice changes who is speaking them.
+
+    Precision belongs here for a less obvious reason. fp16 and fp32 do the same
+    arithmetic to different numbers of digits, and because these models sample,
+    a tiny difference can select a different token. Resuming an fp32 render in
+    fp16 would splice two subtly different voices into one chapter.
     """
     import hashlib
     return {
@@ -331,6 +337,7 @@ def render_fingerprint(text: str, engine_name: str, voice: str, chunk_count: int
         "engine": engine_name or "",
         "voice": voice or "",
         "chunks": chunk_count,
+        "precision": precision or "fp32",
     }
 
 
@@ -597,7 +604,8 @@ async def _synthesize_chapter_streaming(
     gap = engine.segment_gap(voice)
     loop = asyncio.get_event_loop()
     chunks = engine.plan_chunks(text)
-    fingerprint = render_fingerprint(text, engine.name, voice, len(chunks))
+    fingerprint = render_fingerprint(text, engine.name, voice, len(chunks),
+                                     getattr(engine, "precision", "fp32"))
 
     # Reuse a partial render if one is on disk and was produced from the same
     # text, engine and voice. Chunking is deterministic, so segment N is always
