@@ -942,6 +942,33 @@ a:hover { color: var(--accent-hover); }
     font-weight: 500;
 }
 
+/* Placeholder rows while a novel's chapters load, so the previous book's
+   table of contents is never left on screen. */
+.chapter-row--skeleton {
+    pointer-events: none;
+    opacity: 0.55;
+}
+.skeleton-bar {
+    display: inline-block;
+    height: 0.9em;
+    border-radius: 4px;
+    background: linear-gradient(90deg,
+        var(--border) 25%, var(--bg-secondary) 50%, var(--border) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.skeleton-bar--num { width: 2em; margin-right: 12px; }
+.skeleton-bar--title { width: min(60%, 320px); }
+
+@keyframes skeleton-shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skeleton-bar { animation: none; }
+}
+
 /* Per-voice sentence pause stepper, inline on each Voices row */
 .voice-pause {
     display: inline-flex;

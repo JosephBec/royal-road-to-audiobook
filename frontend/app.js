@@ -434,6 +434,13 @@ async function openNovel(novelId, opts = {}) {
     if (!novel) return;
 
     state.currentNovel = novel;
+    // Drop the previous novel's chapters before the view switches. They used
+    // to stay on screen until the new fetch returned, so opening a second
+    // book briefly showed the first one's table of contents.
+    state.chapters = [];
+    state.chapterTotal = 0;
+    state.chapterTotalPages = 1;
+    showChapterListLoading();
     // Open to the page holding the chapter you're on, not always page 1.
     const _sort = novel.effective_settings?.chapter_sort || state.settings.chapter_sort || 'asc';
     state.chapterPage = pageForOrder(novel.progress_chapter, novel.total_chapters, _sort);
@@ -537,17 +544,38 @@ function closeNovel() {
     loadLibrary();
 }
 
+function showChapterListLoading() {
+    const list = document.getElementById('chapter-list');
+    if (!list) return;
+    list.innerHTML = Array.from({ length: 6 }, () =>
+        '<div class="chapter-row chapter-row--skeleton">'
+        + '<span class="skeleton-bar skeleton-bar--num"></span>'
+        + '<span class="skeleton-bar skeleton-bar--title"></span>'
+        + '</div>').join('');
+    const pager = document.getElementById('chapter-pagination');
+    if (pager) pager.innerHTML = '';
+}
+
 async function loadChapters() {
     if (!state.currentNovel) return;
+    // Tag the request with the novel it belongs to. Clicking through books
+    // quickly can land an earlier response after a later one, which would
+    // paint the wrong chapters over the right ones.
+    const requestedId = state.currentNovel.id;
 
     try {
-        const data = await api('GET', `/api/novels/${state.currentNovel.id}/chapters?page=${state.chapterPage}&per_page=50`);
+        const data = await api('GET', `/api/novels/${requestedId}/chapters?page=${state.chapterPage}&per_page=50`);
+        if (state.currentNovel?.id !== requestedId) return;   // superseded
         state.chapters = data.chapters;
         state.chapterTotalPages = data.total_pages;
         state.chapterTotal = data.total;
         renderChapters();
     } catch (e) {
         console.error('Failed to load chapters:', e);
+        if (state.currentNovel?.id === requestedId) {
+            document.getElementById('chapter-list').innerHTML =
+                '<p class="hint">Could not load chapters.</p>';
+        }
     }
 }
 
