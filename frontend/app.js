@@ -1232,9 +1232,11 @@ function updateMediaSession() {
     });
     navigator.mediaSession.setActionHandler('pause', () => {
         if (state.audio.paused) {
-            // Already paused: this is the keepalive being paused, not a real
-            // request. Stop it and keep the state honest.
-            stopSilentKeepalive();
+            // Already paused, so this is iOS pausing the keepalive rather than
+            // a real request. Restart it: stopping here tore down the very
+            // session it exists to hold open, and one stray tap on the lock
+            // screen then broke resume entirely.
+            startSilentKeepalive();
             assertPausedState();
             return;
         }
@@ -1643,6 +1645,34 @@ function updateFavoriteButton() {
     const fav = !!state.currentNovel?.favorite;
     btn.textContent = fav ? '⭐' : '☆';
     btn.title = fav ? 'Unfavorite' : 'Favorite';
+    updateArchiveButton();
+}
+
+function updateArchiveButton() {
+    const btn = document.getElementById('btn-archive');
+    if (!btn) return;
+    // Closed box = filed away, open box = ready to take back out.
+    const archived = !!state.currentNovel?.archived;
+    btn.textContent = archived ? '📂' : '📦';
+    btn.title = archived ? 'Unarchive' : 'Archive';
+    btn.classList.toggle('is-archived', archived);
+}
+
+async function toggleArchive() {
+    const novel = state.currentNovel;
+    if (!novel) return;
+    const next = !novel.archived;
+    try {
+        const result = await api('PATCH', `/api/novels/${novel.id}/settings`, { archived: next });
+        novel.archived = result.archived;
+        updateArchiveButton();
+        await loadLibrary();
+        showToast(next
+            ? 'Archived — hidden from the library and no longer pre-rendered'
+            : 'Restored to the library');
+    } catch (e) {
+        showToast('Could not archive: ' + e.message);
+    }
 }
 
 // ===== Drag-to-reorder =====
@@ -1760,7 +1790,6 @@ function openNovelSettings() {
     document.getElementById('ns-speed-value').textContent =
         ov.speed != null ? `${ov.speed.toFixed(2)}x` : `Default (${state.settings.speed.toFixed(2)}x)`;
 
-    document.getElementById('ns-archived').checked = !!novel.archived;
     document.getElementById('ns-autoplay').value = ov.auto_play == null ? '' : String(ov.auto_play);
     document.getElementById('ns-sort').value = ov.chapter_sort ?? '';
 
@@ -2088,6 +2117,7 @@ function setupEventListeners() {
     document.getElementById('btn-favorite').addEventListener('click', () => {
         if (state.currentNovel) toggleFavorite(state.currentNovel.id);
     });
+    document.getElementById('btn-archive').addEventListener('click', toggleArchive);
 
     // Per-novel settings
     document.getElementById('btn-novel-settings').addEventListener('click', openNovelSettings);
@@ -2113,13 +2143,6 @@ function setupEventListeners() {
     });
     document.getElementById('ns-sort').addEventListener('change', (e) => {
         updateNovelSetting('chapter_sort', e.target.value || null);
-    });
-    document.getElementById('ns-archived').addEventListener('change', async (e) => {
-        await updateNovelSetting('archived', e.target.checked);
-        await loadLibrary();
-        showToast(e.target.checked
-            ? 'Archived — hidden from the library and no longer pre-rendered'
-            : 'Restored to the library');
     });
     document.getElementById('ns-speed-down').addEventListener('click', () => {
         const base = state.currentNovel?.settings?.speed ?? state.settings.speed;

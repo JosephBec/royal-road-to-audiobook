@@ -710,6 +710,15 @@ a:hover { color: var(--accent-hover); }
     bottom: 0;
     left: 0;
     right: 0;
+    /* iOS Safari doesn't reposition fixed elements during momentum scrolling —
+       the bar visibly lags mid-screen and only snaps back when the scroll
+       settles. Promoting it to its own compositor layer makes the OS move it
+       with the viewport instead of repainting it per frame. */
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    will-change: transform;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border);
     padding: 8px 24px;
