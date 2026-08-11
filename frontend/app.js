@@ -1897,87 +1897,30 @@ function stopSilentKeepalive() {
 }
 
 function resumeFromRemote(tag) {
-    // Stop the loop BEFORE starting the chapter. iOS granted the first
-    // background resume instantly but parked every later play() while the
-    // silence loop was still playing — the promises hung until unlock
-    // (client log 17:37, 2026-08-11). With the stage cleared the chapter is
-    // the only claimant.
+    // Stop the loop BEFORE starting the chapter — iOS parks a chapter's
+    // play() while the silence loop is still playing (client log 17:37,
+    // 2026-08-11), so the stage has to be cleared first.
+    //
+    // This used to also carry a multi-stage "zombie playback" detector and
+    // automatic recovery (seek/reload/re-seek), built when fully-rendered
+    // chapters played over progressive WAV — Safari drops a paused WAV's
+    // background connection, so a bare resume could succeed on paper while
+    // producing no sound. Routing those chapters over HLS instead (see
+    // playChapter) removed the problem that machinery existed for, and its
+    // own complexity had started causing new bugs — including racing the
+    // command queue it was nested inside. Cut in favor of one honest
+    // fallback: if resuming fails outright, hold the session open and let
+    // the in-app Resume button — which has worked through every one of
+    // these tests — be the recovery path instead of another automated one.
     stopSilentKeepalive();
     const a = state.audio;
-    const from = a.currentTime;
-    const isHls = (a.currentSrc || '').includes('.m3u8');
-    // Re-prime the decoder — progressive WAV only. After minutes backgrounded
-    // Safari has dropped the WAV's connection and a bare play() resolves into
-    // ZOMBIE playback: 'playing' fires, promises resolve, currentTime never
-    // moves (client log 17:47 — three resumes frozen at 190.9s). HLS rebuilds
-    // its own pipeline, and seeking it here wedged an otherwise-fine resume
-    // (client log 18:24:30 — froze right after our seek).
-    if (!state._instantActive && !isHls && isFinite(from)) {
-        try { a.currentTime = from; } catch (e) {}
-    }
-    // Returned so the command queue waits for exactly this — play() settling
-    // — and no longer than that. The zombie watchdog/recovery below runs
-    // independently and is NOT part of what the queue waits on: a resume
-    // that's slowly rebuffering must not block a genuine pause command that
-    // arrives a moment later, only protect it from racing this play() call.
-    const settled = a.play().then(() => dlog(tag + '-ok'))
+    // Returned so the command queue waits for exactly this settling before
+    // letting the next command touch the element (see queueMediaCommand).
+    return a.play().then(() => dlog(tag + '-ok'))
         .catch((e) => {
             dlog(tag + '-failed', { err: String(e) });
             if (a.paused) startSilentKeepalive();
         });
-    // Watchdog judges by MOVEMENT, not by promises — zombies pass promises.
-    // Two-phase: an HLS resume legitimately spends ~2s rebuffering, and the
-    // first single-shot check reloaded a stream that was already recovering
-    // (client log 18:24:16). Only a playhead still frozen at the second look
-    // is a corpse.
-    const check = (attempt) => {
-        if (a.paused) { dlog(tag + '-watchdog'); startSilentKeepalive(); return; }
-        if (state._instantActive || Math.abs(a.currentTime - from) > 0.3) return;
-        if (attempt === 1) {
-            dlog(tag + '-slow');
-            setTimeout(() => check(2), 3000);
-            return;
-        }
-        dlog(tag + '-zombie', { from });
-        recoverZombiePlayback(tag, from);
-    };
-    setTimeout(() => check(1), 2500);
-    return settled;
-}
-
-async function recoverZombiePlayback(tag, pos) {
-    // Last rung: rebuild the element from scratch — refetch, seek back, play.
-    const a = state.audio;
-    try {
-        a.load();
-        await new Promise((resolve) => {
-            const done = () => {
-                a.removeEventListener('canplay', done);
-                a.removeEventListener('error', done);
-                resolve();
-            };
-            a.addEventListener('canplay', done);
-            a.addEventListener('error', done);
-            setTimeout(done, 5000);
-        });
-        a.currentTime = pos;
-        await a.play();
-        dlog(tag + '-recovered');
-    } catch (e) {
-        dlog(tag + '-recover-failed', { err: String(e) });
-        if (a.paused) startSilentKeepalive();
-        return;
-    }
-    // Judge success by movement from wherever the recovery actually landed —
-    // an HLS seek snaps to a segment boundary a few seconds shy of the
-    // target, which the old "moved from pos" metric scored as failure while
-    // audio was audibly playing (client log 18:24:46, moved:0 at ct 208.6).
-    const landed = a.currentTime;
-    setTimeout(() => {
-        const moved = a.currentTime - landed > 0.4;
-        dlog(tag + '-post-recover', { moved: moved ? 1 : 0 });
-        if (!moved && a.paused) startSilentKeepalive();
-    }, 2500);
 }
 
 function reviveMediaSession() {
