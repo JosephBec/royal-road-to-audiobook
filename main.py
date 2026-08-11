@@ -47,6 +47,21 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("TQDM_DISABLE", "1")
 
 
+class _ProactorDisconnectFilter(logging.Filter):
+    """Drop Windows' phantom disconnect errors from the log.
+
+    The Proactor event loop logs a full ERROR traceback every time a client
+    vanishes mid-transfer — a phone locking, Safari abandoning a segment
+    fetch. That is routine on a server whose only client is a phone: one
+    evening of use logged 168 of them, burying the errors that matter.
+    """
+    def filter(self, record):
+        return "_call_connection_lost" not in record.getMessage()
+
+
+logging.getLogger("asyncio").addFilter(_ProactorDisconnectFilter())
+
+
 def _git_sha() -> str:
     """Short SHA of the running code, so you can tell what's actually live
     (the tray launches main.py as a child — easy to run a stale build)."""

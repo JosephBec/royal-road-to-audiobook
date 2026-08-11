@@ -483,8 +483,22 @@ a:hover { color: var(--accent-hover); }
 }
 
 .resume-btn {
+    /* Full width, like the description card below and the chapter rows —
+       a centered content-sized pill floated alone and never lined up with
+       anything. Fixed footprint: the swap from the placeholder label to
+       "Resume — Ch. 265 (2:30)" changes nothing but the text. */
     display: block;
-    margin: 0 auto 16px;
+    width: 100%;
+    margin: 0 0 16px;
+    padding: 12px 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.resume-btn:disabled {
+    /* Placeholder state: visibly waiting, not broken. */
+    opacity: 0.45;
 }
 
 .novel-description {

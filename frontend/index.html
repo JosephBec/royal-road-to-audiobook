@@ -74,7 +74,9 @@
                     <button id="btn-save-plex" class="secondary-btn" title="Save to Plex">💾<span class="btn-label"> Save to Plex</span></button>
                 </div>
             </div>
-            <button id="btn-resume" class="primary-btn resume-btn" style="display:none;"></button>
+            <!-- Always present: a disabled placeholder until this novel's
+                 progress arrives, so the layout never shifts when it fills. -->
+            <button id="btn-resume" class="primary-btn resume-btn" disabled>▶ Resume</button>
             <div id="novel-description" class="novel-description clamped"></div>
             <button id="desc-toggle" class="desc-toggle" style="display:none;">Read more</button>
             <div id="chapter-list" class="chapter-list">

@@ -516,11 +516,13 @@ async function openNovel(novelId, opts = {}) {
 
     updateFavoriteButton();
 
-    // Hide the resume button until THIS novel's progress arrives. It keeps
-    // its last contents otherwise, and the chapter load plus the favorites
-    // refresh can take seconds — long enough to read "Resume — Ch. 4" from
-    // whatever novel was open before and believe it.
-    document.getElementById('btn-resume').style.display = 'none';
+    // Reset the resume button to its placeholder now — synchronously, so the
+    // previous novel's label can never be read on this one — and start the
+    // progress fetch immediately. It used to wait behind the chapter list and
+    // the favorites refresh, which is why the button appeared seconds late
+    // and shoved the layout around when it did.
+    resetResumeButton();
+    const progressPromise = updateResumeButton();
 
     // Source site link (opens the scraped page in a new tab). EPUBs have an
     // epub:// pseudo-URL with no web page, so show a plain label instead.
@@ -547,23 +549,38 @@ async function openNovel(novelId, opts = {}) {
     }
 
     await loadChapters();
-    const progress = await updateResumeButton();
+    const progress = await progressPromise;
     if (opts.resume && progress?.chapter_id) {
         await resumeNovel(novel, progress.chapter_id);
     }
 }
 
+// The button is always present so the layout never shifts; this is its
+// waiting state. Disabled and dimmed rather than hidden.
+function resetResumeButton() {
+    const btn = document.getElementById('btn-resume');
+    btn.disabled = true;
+    btn.textContent = '▶ Resume';
+    btn.onclick = null;
+}
+
 async function updateResumeButton() {
     const btn = document.getElementById('btn-resume');
-    btn.style.display = 'none';
-    if (!state.currentNovel) return null;
+    const novel = state.currentNovel;
+    if (!novel) return null;
     try {
-        const progress = await api('GET', `/api/progress/${state.currentNovel.id}`);
-        if (!progress.chapter_id) return null;
+        const progress = await api('GET', `/api/progress/${novel.id}`);
+        // The user may have navigated elsewhere while this was in flight;
+        // filling the button now would label it with the wrong novel.
+        if (state.currentNovel?.id !== novel.id) return progress;
+        if (!progress.chapter_id) return null;   // no chapters yet: stay placeholder
         const pos = progress.position_seconds > 5 ? ` (${formatTime(progress.position_seconds)})` : '';
-        btn.textContent = `▶ Resume — Ch. ${progress.chapter_order}${pos}`;
-        btn.style.display = '';
-        const novel = state.currentNovel;
+        // Every novel points at a chapter from the moment it is imported, so
+        // this fills for never-played books too — as "Play", because there is
+        // nothing to resume yet.
+        const verb = progress.updated_at ? 'Resume' : 'Play';
+        btn.textContent = `▶ ${verb} — Ch. ${progress.chapter_order}${pos}`;
+        btn.disabled = false;
         btn.onclick = () => resumeNovel(novel, progress.chapter_id);
         return progress;
     } catch (e) {
