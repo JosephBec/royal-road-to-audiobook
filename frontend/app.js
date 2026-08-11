@@ -1470,11 +1470,9 @@ function setupAudioEvents() {
         state.isPlaying = true;
         document.getElementById('btn-play-pause').textContent = '⏸';
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-        // Build the keepalive's AudioContext here, inside a guaranteed user
-        // gesture, so resuming it later from a lock-screen handler — where
-        // gesture rules are murkier — only has to resume, never create.
-        prepareSilentKeepalive();
-        stopSilentKeepalive();
+        // The keepalive runs during playback too (see prepareSilentKeepalive);
+        // here we clear the pause expiry and recover from interruptions.
+        ensureKeepaliveRunning();
         updatePositionState();
     });
 
@@ -1611,13 +1609,14 @@ function updateMediaSession() {
     // element world entirely there is nothing to route wrongly: paused means
     // paused, and a pause command while paused can only be a toggle press
     // meaning resume.
+    // Never suspend the keepalive here: if the play() failed or stalled, a
+    // suspended loop would let the session die with nothing left to claim.
+    // The audio element's own play event does the bookkeeping on success.
     navigator.mediaSession.setActionHandler('play', () => {
-        stopSilentKeepalive();
         state.audio.play().catch(() => {});
     });
     navigator.mediaSession.setActionHandler('pause', () => {
         if (state.audio.paused) {
-            stopSilentKeepalive();
             state.audio.play().catch(() => {});
         } else {
             state.audio.pause();
@@ -1687,11 +1686,15 @@ function keepaliveEnabled() {
 }
 
 function prepareSilentKeepalive() {
-    // Build the context inside a known user gesture (the play that starts the
-    // chapter) and leave it suspended. iOS only lets audio start under a
-    // gesture, and whether a lock-screen action handler counts as one is
-    // exactly the kind of ambiguity this rewrite exists to remove — a resume()
-    // on an existing context is the least it could ever need to do.
+    // Build the context inside a known user gesture and leave it RUNNING.
+    // An earlier design suspended it during playback and resumed it on pause,
+    // which placed the one resume() that ever mattered in the least privileged
+    // moment there is — backgrounded, screen locked, no gesture — where iOS
+    // may simply ignore it (and did: fully-rendered chapters lost their
+    // session seconds after a lock-screen pause; live HLS streams hold their
+    // session on their own, which masked the bug for Instant Play). Running,
+    // the loop is zeroed samples: inaudible, nearly free, and invisible to
+    // media-session routing — so a pause never has to start anything.
     if (!keepaliveEnabled() || keepaliveCtx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
@@ -1705,18 +1708,25 @@ function prepareSilentKeepalive() {
         source.loop = true;
         source.connect(keepaliveCtx.destination);
         source.start();
-        keepaliveCtx.suspend().catch(() => {});
     } catch (e) {
         keepaliveCtx = null;
     }
 }
 
-function startSilentKeepalive() {
+function ensureKeepaliveRunning() {
+    // Playback path: keep the loop alive with no expiry — the chapter itself
+    // is what's draining the battery right now, not this.
     if (!keepaliveEnabled()) return;
     prepareSilentKeepalive();
     if (!keepaliveCtx) return;
     keepaliveCtx.resume().catch(() => {});
-    if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
+    if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
+}
+
+function startSilentKeepalive() {
+    // Pause path: keep holding the session, but not forever.
+    ensureKeepaliveRunning();
+    if (!keepaliveCtx) return;
     keepaliveExpiry = setTimeout(stopSilentKeepalive, KEEPALIVE_MAX_MS);
 }
 
@@ -1736,7 +1746,8 @@ function reviveMediaSession() {
     // An interruption (a call, Siri) can suspend the context while the page is
     // backgrounded; coming back to the page is the earliest chance to restart
     // it. Idempotent when it is already running.
-    if (!state.isPlaying) startSilentKeepalive();
+    if (state.isPlaying) ensureKeepaliveRunning();
+    else startSilentKeepalive();
 }
 
 function updatePositionState() {
@@ -2931,8 +2942,11 @@ function setupEventListeners() {
 
     document.getElementById('setting-keepalive').addEventListener('change', (e) => {
         localStorage.setItem(KEEPALIVE_KEY, e.target.checked ? '1' : '0');
-        if (e.target.checked && !state.isPlaying) startSilentKeepalive();
-        if (!e.target.checked) stopSilentKeepalive();
+        if (e.target.checked) {
+            state.isPlaying ? ensureKeepaliveRunning() : startSilentKeepalive();
+        } else {
+            stopSilentKeepalive();
+        }
         showToast(e.target.checked
             ? 'Lock-screen controls will stay active while paused'
             : 'Lock-screen keepalive off');
