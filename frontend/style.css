@@ -6,6 +6,9 @@
 }
 
 :root {
+    /* Tells the browser to draw native chrome (scrollbars, form controls,
+       pickers) dark; light-family themes flip it below. */
+    color-scheme: dark;
     --bg-primary: #0f1117;
     --bg-secondary: #1a1d27;
     --bg-card: #222536;
@@ -30,9 +33,12 @@
     --player-height: 100px;
     --topbar-height: 60px;
     --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* Derives from --text-muted, so it re-tints with every theme. */
+    --scrollbar-thumb: color-mix(in srgb, var(--text-muted) 60%, transparent);
 }
 
 [data-theme="light"] {
+    color-scheme: light;
     --bg-primary: #f5f6fa;
     --bg-secondary: #ffffff;
     --bg-card: #ffffff;
@@ -63,6 +69,7 @@
 
 [data-theme="warm"] {
     /* Sepia / paper reading tones — a light-family theme. */
+    color-scheme: light;
     --bg-primary: #f4ecdd;
     --bg-secondary: #fdf8ee;
     --bg-card: #fdf8ee;
@@ -79,6 +86,21 @@
     --border: #e0d5bf;
     --shadow: 0 4px 24px rgba(80,60,20,0.1);
 }
+
+/* Themed scrollbars. scrollbar-color inherits, covering every scroll region
+   (page, settings panels, chapter lists) in Chromium/Firefox; the -webkit
+   rules are the desktop-Safari fallback. iOS uses untinted overlay bars. */
+html {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* Disable double-tap-to-zoom (keeps pinch zoom and scrolling) */
 html, body {
