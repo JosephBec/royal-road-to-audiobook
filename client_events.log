@@ -1,0 +1,73 @@
+{"srv": "2026-08-11T16:37:20+00:00", "sid": "smoke1", "t": 1, "e": "smoke-test"}
+{"srv": "2026-08-11T16:40:28+00:00", "sid": "l327uo", "t": 1786466421119, "e": "pageshow", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "none", "sa": 0, "persisted": 0}
+{"srv": "2026-08-11T16:40:39+00:00", "sid": "l327uo", "t": 1786466438195, "e": "ka:created", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "suspended", "sa": 0}
+{"srv": "2026-08-11T16:40:39+00:00", "sid": "l327uo", "t": 1786466438263, "e": "ka:state", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466441731, "e": "audio:emptied", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466441920, "e": "playChapter", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "running", "sa": 0, "id": 4271, "mode": "instant", "ready": 1}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466441922, "e": "audio:emptied", "ct": 0, "paused": true, "rs": 0, "src": "none", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442131, "e": "pos:set", "ct": 0, "paused": true, "rs": 1, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442131, "e": "pos:set", "ct": 0, "paused": true, "rs": 1, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442209, "e": "audio:play", "ct": 112.5, "paused": false, "rs": 3, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442209, "e": "pos:set", "ct": 112.5, "paused": false, "rs": 3, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442209, "e": "audio:playing", "ct": 112.5, "paused": false, "rs": 3, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442216, "e": "audio:seeking", "ct": 112.5, "paused": false, "rs": 3, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:42+00:00", "sid": "l327uo", "t": 1786466442219, "e": "pos:set", "ct": 112.5, "paused": false, "rs": 3, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:40:47+00:00", "sid": "l327uo", "t": 1786466446380, "e": "ms:pause", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:40:47+00:00", "sid": "l327uo", "t": 1786466446417, "e": "audio:pause", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "instant": 0}
+{"srv": "2026-08-11T16:40:47+00:00", "sid": "l327uo", "t": 1786466446418, "e": "pos:set", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:40:47+00:00", "sid": "l327uo", "t": 1786466448881, "e": "ka:state", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:40:47+00:00", "sid": "l327uo", "t": 1786466448967, "e": "vis", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "hidden", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:40:53+00:00", "sid": "l327uo", "t": 1786466452448, "e": "audio:stalled", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "hidden", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615499, "e": "ms:play", "ct": 115.8, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615552, "e": "vis", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615596, "e": "revive", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "interrupted", "sa": 0, "playing": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615598, "e": "pos:set", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "interrupted", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615632, "e": "ka:resume-ok", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615632, "e": "audio:play", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615632, "e": "pos:set", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615633, "e": "audio:playing", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615635, "e": "ms:play-ok", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466615635, "e": "ka:state", "ct": 115.8, "paused": false, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466617288, "e": "audio:pause", "ct": 117.4, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "instant": 0}
+{"srv": "2026-08-11T16:43:45+00:00", "sid": "l327uo", "t": 1786466617289, "e": "pos:set", "ct": 117.4, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "dur": 1359}
+{"srv": "2026-08-11T16:43:51+00:00", "sid": "l327uo", "t": 1786466630181, "e": "audio:stalled", "ct": 117.4, "paused": true, "rs": 4, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:51+00:00", "sid": "l327uo", "t": 1786466630372, "e": "audio:abort", "ct": 0, "paused": true, "rs": 0, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:51+00:00", "sid": "l327uo", "t": 1786466630372, "e": "audio:emptied", "ct": 0, "paused": true, "rs": 0, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:51+00:00", "sid": "l327uo", "t": 1786466630398, "e": "playChapter", "ct": 0, "paused": true, "rs": 0, "src": "file", "vis": "visible", "ka": "running", "sa": 0, "id": 3415, "mode": "instant", "ready": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632593, "e": "audio:emptied", "ct": 0, "paused": true, "rs": 0, "src": "file", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632642, "e": "pos:skip", "ct": 0, "paused": true, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632642, "e": "pos:skip", "ct": 0, "paused": true, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632694, "e": "audio:play", "ct": 0, "paused": false, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632695, "e": "pos:skip", "ct": 0, "paused": false, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632695, "e": "audio:waiting", "ct": 0, "paused": false, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632695, "e": "audio:seeking", "ct": 0, "paused": false, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632695, "e": "pos:skip", "ct": 0, "paused": false, "rs": 1, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:53+00:00", "sid": "l327uo", "t": 1786466632782, "e": "audio:playing", "ct": 0, "paused": false, "rs": 3, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:56+00:00", "sid": "l327uo", "t": 1786466636108, "e": "audio:stalled", "ct": 3.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:43:56+00:00", "sid": "l327uo", "t": 1786466636496, "e": "audio:waiting", "ct": 3.7, "paused": false, "rs": 2, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:44:01+00:00", "sid": "l327uo", "t": 1786466640297, "e": "audio:playing", "ct": 3.6, "paused": false, "rs": 3, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:44:04+00:00", "sid": "l327uo", "t": 1786466643474, "e": "audio:stalled", "ct": 3.6, "paused": false, "rs": 3, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:44:19+00:00", "sid": "l327uo", "t": 1786466658563, "e": "audio:stalled", "ct": 6.9, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:44:19+00:00", "sid": "l327uo", "t": 1786466658979, "e": "ms:pause", "ct": 7.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:44:19+00:00", "sid": "l327uo", "t": 1786466659016, "e": "audio:pause", "ct": 7.3, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0, "instant": 0}
+{"srv": "2026-08-11T16:44:19+00:00", "sid": "l327uo", "t": 1786466659016, "e": "pos:skip", "ct": 7.3, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466705941, "e": "ms:play", "ct": 7.3, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466705954, "e": "audio:play", "ct": 7.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466705954, "e": "pos:skip", "ct": 7.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466705954, "e": "audio:playing", "ct": 7.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466705958, "e": "ms:play-ok", "ct": 7.3, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466706735, "e": "ms:pause", "ct": 8.1, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466706772, "e": "audio:pause", "ct": 8.1, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0, "instant": 0}
+{"srv": "2026-08-11T16:45:06+00:00", "sid": "l327uo", "t": 1786466706772, "e": "pos:skip", "ct": 8.1, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:45:10+00:00", "sid": "l327uo", "t": 1786466709463, "e": "audio:stalled", "ct": 8.1, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:03+00:00", "sid": "l327uo", "t": 1786466822750, "e": "ms:play", "ct": 8.1, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:03+00:00", "sid": "l327uo", "t": 1786466822781, "e": "audio:play", "ct": 8.1, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:03+00:00", "sid": "l327uo", "t": 1786466822781, "e": "pos:skip", "ct": 8.1, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:03+00:00", "sid": "l327uo", "t": 1786466822781, "e": "audio:playing", "ct": 8.1, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:03+00:00", "sid": "l327uo", "t": 1786466822783, "e": "ms:play-ok", "ct": 8.1, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:07+00:00", "sid": "l327uo", "t": 1786466826966, "e": "ms:pause", "ct": 12.2, "paused": false, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:07+00:00", "sid": "l327uo", "t": 1786466827002, "e": "audio:pause", "ct": 12.2, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0, "instant": 0}
+{"srv": "2026-08-11T16:47:07+00:00", "sid": "l327uo", "t": 1786466827002, "e": "pos:skip", "ct": 12.2, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:47:07+00:00", "sid": "l327uo", "t": 1786466827376, "e": "audio:stalled", "ct": 12.2, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "running", "sa": 0}
+{"srv": "2026-08-11T16:48:46+00:00", "sid": "l327uo", "t": 1786466927120, "e": "ka:state", "ct": 12.2, "paused": true, "rs": 4, "src": "hls", "vis": "visible", "ka": "interrupted", "sa": 0}
+{"srv": "2026-08-11T16:48:46+00:00", "sid": "l327uo", "t": 1786466927333, "e": "vis", "ct": 12.2, "paused": true, "rs": 4, "src": "hls", "vis": "hidden", "ka": "interrupted", "sa": 0}
