@@ -102,8 +102,9 @@ const THEMES = [
     { id: 'warm',  name: 'Warm',       family: 'light', preview: { bg: '#f4ecdd', card: '#fdf8ee', text: '#3d3427' } },
 ];
 // First = the themes' default purple; picking it clears the stored accent.
-const ACCENT_PRESETS = ['#6c5ce7', '#3b82f6', '#14b8a6', '#22c55e',
-                        '#f59e0b', '#f97316', '#f43f5e', '#ec4899'];
+// 11 presets + the custom picker = a full 6x2 grid, no orphan on a last row.
+const ACCENT_PRESETS = ['#6c5ce7', '#a855f7', '#ec4899', '#f43f5e', '#f97316', '#f59e0b',
+                        '#22c55e', '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1'];
 
 function themeFamily(theme) {
     return THEMES.find(t => t.id === theme)?.family || 'dark';
@@ -160,17 +161,35 @@ function setAccent(accent) {
     renderThemePanel();
 }
 
+function chosenTheme(family) {
+    // The family's representative: the active theme if it belongs to this
+    // family, else whatever was last used from it (device-local memory).
+    if (themeFamily(state.settings.theme) === family) return state.settings.theme;
+    const remembered = localStorage.getItem(family === 'dark' ? 'lastDarkTheme' : 'lastLightTheme');
+    if (THEMES.some(t => t.id === remembered && t.family === family)) return remembered;
+    return family === 'dark' ? 'dark' : 'light';
+}
+
 function renderThemePanel() {
-    const swatches = document.getElementById('theme-swatches');
-    if (!swatches || !document.getElementById('settings-panel-theme')) return;
-    swatches.innerHTML = THEMES.map(t => `
-        <button class="theme-swatch${t.id === state.settings.theme ? ' active' : ''}" data-theme-id="${t.id}">
-            <div class="theme-swatch-preview" style="background:${t.preview.bg};">
-                <div class="theme-swatch-card" style="background:${t.preview.card};color:${t.preview.text};">Aa</div>
-                <div class="theme-swatch-dot"></div>
-            </div>
-            <div class="theme-swatch-name">${t.name}</div>
-        </button>`).join('');
+    if (!document.getElementById('settings-panel-theme')) return;
+    const activeFamily = themeFamily(state.settings.theme);
+
+    document.getElementById('theme-mode-switch').innerHTML = `
+        <button class="theme-mode-btn${activeFamily === 'dark' ? ' active' : ''}" data-mode="dark">\u{1F319} Dark</button>
+        <button class="theme-mode-btn${activeFamily === 'light' ? ' active' : ''}" data-mode="light">\u{2600}\u{FE0F} Light</button>`;
+
+    for (const family of ['dark', 'light']) {
+        const chosen = chosenTheme(family);
+        document.getElementById(`theme-swatches-${family}`).innerHTML =
+            THEMES.filter(t => t.family === family).map(t => `
+                <button class="theme-swatch${t.id === chosen ? ' active' : ''}" data-theme-id="${t.id}">
+                    <div class="theme-swatch-preview" style="background:${t.preview.bg};">
+                        <div class="theme-swatch-card" style="background:${t.preview.card};color:${t.preview.text};">Aa</div>
+                        <div class="theme-swatch-dot"></div>
+                    </div>
+                    <div class="theme-swatch-name">${t.name}</div>
+                </button>`).join('');
+    }
 
     const accent = state.settings.accent;
     const isPreset = !accent || ACCENT_PRESETS.includes(accent);
@@ -2886,20 +2905,27 @@ function setupEventListeners() {
         updateSetting('auto_play', e.target.checked);
     });
 
-    // Theme tab (contents re-render on every change, so delegate)
-    document.getElementById('theme-swatches').addEventListener('click', (e) => {
-        const btn = e.target.closest('.theme-swatch');
-        if (btn) setTheme(btn.dataset.themeId);
-    });
-    document.getElementById('accent-row').addEventListener('click', (e) => {
+    // Theme tab (contents re-render on every change, so delegate to the panel)
+    const themePanel = document.getElementById('settings-panel-theme');
+    themePanel.addEventListener('click', (e) => {
+        const mode = e.target.closest('.theme-mode-btn');
+        if (mode) return setTheme(chosenTheme(mode.dataset.mode));
+        const swatch = e.target.closest('.theme-swatch');
+        if (swatch) {
+            const id = swatch.dataset.themeId;
+            if (themeFamily(id) === themeFamily(state.settings.theme)) return setTheme(id);
+            // Other family: remember it as that family's pick without switching.
+            localStorage.setItem(themeFamily(id) === 'dark' ? 'lastDarkTheme' : 'lastLightTheme', id);
+            return renderThemePanel();
+        }
         const dot = e.target.closest('.accent-dot');
         if (dot) setAccent(dot.dataset.accent);
     });
     // Live-preview while dragging inside the native picker; persist on commit.
-    document.getElementById('accent-row').addEventListener('input', (e) => {
+    themePanel.addEventListener('input', (e) => {
         if (e.target.id === 'accent-custom-input') applyAccent(e.target.value);
     });
-    document.getElementById('accent-row').addEventListener('change', (e) => {
+    themePanel.addEventListener('change', (e) => {
         if (e.target.id === 'accent-custom-input') setAccent(e.target.value);
     });
 

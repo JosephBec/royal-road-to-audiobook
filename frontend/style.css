@@ -1036,6 +1036,30 @@ a:hover { color: var(--accent-hover); }
     margin-bottom: 10px;
 }
 
+.theme-mode-switch {
+    display: flex;
+    gap: 3px;
+    padding: 3px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.theme-mode-btn {
+    flex: 1;
+    padding: 8px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+}
+.theme-mode-btn.active {
+    background: var(--accent);
+    color: #fff;
+}
+
 .theme-swatches {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -1084,11 +1108,17 @@ a:hover { color: var(--accent-hover); }
     color: var(--text-primary);
 }
 
+/* 11 presets + the custom picker fill a 6x2 grid exactly — symmetrical,
+   nothing orphaned on a wrap line. */
 .accent-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    justify-items: center;
+    gap: 14px 8px;
+}
+.setting-stack .hint {
+    margin: -4px 0 12px;   /* sits between the label and the dots */
+    font-size: 0.85rem;
 }
 .accent-dot {
     width: 34px;
