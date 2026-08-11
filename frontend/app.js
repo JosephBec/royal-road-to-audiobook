@@ -1837,21 +1837,61 @@ function resumeFromRemote(tag) {
     // background resume instantly but parked every later play() while the
     // silence loop was still playing — the promises hung until unlock
     // (client log 17:37, 2026-08-11). With the stage cleared the chapter is
-    // the only claimant. The watchdog restarts the loop if the chapter fails
-    // to actually produce sound, so a failed resume can't strand the session
-    // with nothing playing at all.
+    // the only claimant.
     stopSilentKeepalive();
-    setTimeout(() => {
-        if (state.audio.paused) {
-            dlog(tag + '-watchdog');
-            startSilentKeepalive();
-        }
-    }, 3000);
-    state.audio.play().then(() => dlog(tag + '-ok'))
+    const a = state.audio;
+    const from = a.currentTime;
+    // Re-prime the decoder. After a couple of backgrounded minutes Safari has
+    // dropped the stream's connection and a bare play() resolves into ZOMBIE
+    // playback: 'playing' fires, promises resolve, currentTime never moves
+    // (client log 17:47 — three resumes frozen at 190.9s). A seek to the
+    // current position forces the pipeline to rebuild before playing.
+    if (!state._instantActive && isFinite(from)) {
+        try { a.currentTime = from; } catch (e) {}
+    }
+    a.play().then(() => dlog(tag + '-ok'))
         .catch((e) => {
             dlog(tag + '-failed', { err: String(e) });
-            if (state.audio.paused) startSilentKeepalive();
+            if (a.paused) startSilentKeepalive();
         });
+    // Watchdog judges by MOVEMENT, not by promises — zombies pass promises.
+    setTimeout(() => {
+        if (a.paused) { dlog(tag + '-watchdog'); startSilentKeepalive(); return; }
+        if (!state._instantActive && a.currentTime - from < 0.4) {
+            dlog(tag + '-zombie', { from });
+            recoverZombiePlayback(tag, from);
+        }
+    }, 2500);
+}
+
+async function recoverZombiePlayback(tag, pos) {
+    // Last rung: rebuild the element from scratch — refetch, seek back, play.
+    const a = state.audio;
+    try {
+        a.load();
+        await new Promise((resolve) => {
+            const done = () => {
+                a.removeEventListener('canplay', done);
+                a.removeEventListener('error', done);
+                resolve();
+            };
+            a.addEventListener('canplay', done);
+            a.addEventListener('error', done);
+            setTimeout(done, 5000);
+        });
+        a.currentTime = pos;
+        await a.play();
+        dlog(tag + '-recovered');
+    } catch (e) {
+        dlog(tag + '-recover-failed', { err: String(e) });
+        if (a.paused) startSilentKeepalive();
+        return;
+    }
+    setTimeout(() => {
+        const moved = a.currentTime - pos > 0.4;
+        dlog(tag + '-post-recover', { moved: moved ? 1 : 0 });
+        if (!moved && a.paused) startSilentKeepalive();
+    }, 2500);
 }
 
 function reviveMediaSession() {
