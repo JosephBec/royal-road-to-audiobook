@@ -1981,12 +1981,61 @@ function resumeFromRemote(tag) {
 
 function checkResumeAudible(tag, ct0) {
     // 'playing' firing and play() resolving are not proof sound is actually
-    // coming out — see resumeFromRemote's comment. This is the one thing
-    // that would have caught it: does currentTime actually advance a few
-    // seconds after a resume "succeeds"? Diagnostic only, no action taken.
+    // coming out. Confirmed with real evidence 2026-08-11: after a paused
+    // HLS session sat backgrounded for ~4.7 minutes, a lock-screen resume
+    // reported success (ms:resume-ok, 'playing' fired) while currentTime
+    // moved 0.004s over the 3s check window — frozen. Not a WAV-only
+    // problem after all; HLS zombies too, just past a longer threshold.
     setTimeout(() => {
         const moved = state.audio.currentTime - ct0 > 0.5;
         dlog(tag + '-audible', { moved: moved ? 1 : 0, ct0, ct1: state.audio.currentTime });
+        if (!moved && !state._instantActive) {
+            // Route through the same queue as remote commands — this
+            // reload/seek/play sequence must not race a fresh command
+            // arriving mid-recovery (see queueMediaCommand).
+            queueMediaCommand(() => recoverZombieResume(tag, ct0));
+        }
+    }, 3000);
+}
+
+async function recoverZombieResume(tag, pos) {
+    // The one recovery rung actually justified by evidence: reload the
+    // (complete/VOD) HLS playlist to rebuild the native pipeline, then seek
+    // and play. Unlike seeking an already-resuming element mid-transition —
+    // which wedged a resume earlier in this investigation — seeking a
+    // freshly reloaded, complete chapter BEFORE its first play() is the
+    // same safe VOD seek every normal chapter open already does.
+    const a = state.audio;
+    const chapterId = state.playback.chapter?.id;
+    dlog(tag + '-zombie-recover-start', { pos });
+    try {
+        a.load();
+        await new Promise((resolve) => {
+            const done = () => {
+                a.removeEventListener('canplay', done);
+                a.removeEventListener('error', done);
+                resolve();
+            };
+            a.addEventListener('canplay', done);
+            a.addEventListener('error', done);
+            setTimeout(done, 6000);
+        });
+        if (state.playback.chapter?.id !== chapterId) return;
+        a.currentTime = pos;
+        await a.play();
+        dlog(tag + '-zombie-recovered');
+    } catch (e) {
+        dlog(tag + '-zombie-recover-failed', { err: String(e) });
+        if (a.paused) startSilentKeepalive();
+        return;
+    }
+    // One confirming look, not another retry loop.
+    const landed = a.currentTime;
+    setTimeout(() => {
+        if (state.playback.chapter?.id !== chapterId) return;
+        const moved = a.currentTime - landed > 0.4;
+        dlog(tag + '-zombie-recover-audible', { moved: moved ? 1 : 0 });
+        if (!moved && a.paused) startSilentKeepalive();
     }, 3000);
 }
 
