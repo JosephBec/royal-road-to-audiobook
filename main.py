@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import subprocess
 import yaml
 from datetime import datetime, timezone
@@ -38,6 +39,12 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# Chatterbox runs tqdm progress bars over every generation (hundreds of lines
+# of carriage-returned sampling rates per chunk). On a headless server they
+# only bury the log lines that matter. tqdm >= 4.66 honors this for any bar
+# that doesn't pass disable explicitly, which is all of chatterbox's.
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 def _git_sha() -> str:

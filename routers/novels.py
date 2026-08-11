@@ -253,6 +253,14 @@ async def update_novel_settings(
         # change takes effect on next play instead of appearing to do nothing
         remove_chapter_audio({ch.id for ch in novel.chapters})
 
+    if provided & {"favorite", "archived", "voice", "engine"}:
+        # Each of these reshapes the cache plan — archiving drops a book from
+        # it, unarchiving adds one, a voice change empties its openings. Nudge
+        # the sweep now instead of leaving the change to the idle tick, so an
+        # unarchived book starts earning its openings immediately.
+        import prefetch
+        prefetch.request_sweep()
+
     logger.info("Novel %d settings updated: %s", novel_id,
                 {f: getattr(novel, f) for f in ("engine", "voice", "speed", "auto_play", "chapter_sort")})
     return _novel_settings_payload(novel, db)
