@@ -65,6 +65,11 @@ def start_worker():
     _wake = asyncio.Event()
     _current = None
     _deferred.clear()
+    # Sweep straight away rather than waiting out the first idle tick. A
+    # restart is the moment the cache is most likely to be behind — anything
+    # interrupted mid-render is still short of its opening — and two minutes of
+    # doing nothing is two minutes the next press of play may have to pay for.
+    _wake.set()
     _worker_task = asyncio.create_task(_worker_loop())
     logger.info("Cache sweep worker started")
 

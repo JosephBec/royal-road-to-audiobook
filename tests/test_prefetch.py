@@ -240,3 +240,25 @@ def test_is_busy_reflects_pending_and_active_work(pf_env):
     assert prefetch.is_busy() is False
     prefetch.request_sweep()
     assert prefetch.is_busy() is True, "a requested sweep is work the export waits on"
+
+
+def test_startup_sweeps_without_waiting_for_a_tick(pf_env, monkeypatch):
+    """A restart is when the cache is most likely to be behind: anything caught
+    mid-render is short of its opening. Idling for the first two minutes is two
+    minutes the next press of play might pay for."""
+    prefetch, *_ = pf_env
+    passes = []
+
+    async def fake_sweep():
+        passes.append(1)
+        raise asyncio.CancelledError
+    monkeypatch.setattr(prefetch, "sweep_once", fake_sweep)
+    monkeypatch.setattr(prefetch, "IDLE_TICK_SECONDS", 30)
+
+    async def run():
+        prefetch.start_worker()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(prefetch._worker_task, timeout=2)
+    asyncio.run(run())
+
+    assert passes == [1]
