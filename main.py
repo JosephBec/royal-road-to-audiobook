@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import os
 import subprocess
@@ -22,7 +21,7 @@ from pathlib import Path
 
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -154,13 +153,6 @@ FRONTEND_DIR = Path(__file__).parent / "frontend"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
-def _asset_version() -> int:
-    """mtime-based stamp of the frontend bundle; changes whenever it does."""
-    return int(max(
-        (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
-    ))
-
-
 @app.get("/")
 async def serve_index():
     """
@@ -170,16 +162,10 @@ async def serve_index():
     never saw when it first cached an asset.
     """
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
-    return HTMLResponse(html.replace("__V__", str(_asset_version())))
-
-
-@app.get("/api/asset-version")
-async def asset_version():
-    """Current frontend stamp. The page compares this against the stamp it
-    was served with and reloads itself when they differ — iOS Safari keeps a
-    long-lived SPA tab on stale code through anything short of a manual
-    address-bar reload, which made every frontend fix a coin flip."""
-    return {"version": _asset_version()}
+    version = int(max(
+        (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
+    ))
+    return HTMLResponse(html.replace("__V__", str(version)))
 
 
 @app.get("/api/version")
@@ -190,31 +176,6 @@ async def version():
         "git_sha": APP_VERSION,
         "started_at": STARTED_AT.isoformat() if STARTED_AT else None,
     }
-
-
-# Diagnostic event stream from the frontend (iOS lock-screen debugging: the
-# phone can't be inspected directly, so the page reports what it saw). JSONL,
-# one event per line, client timestamps preserved.
-CLIENT_LOG = Path(__file__).parent / "client_events.log"
-
-
-@app.post("/api/client-log")
-async def client_log(request: Request):
-    try:
-        payload = json.loads(await request.body())
-    except Exception:
-        return {"ok": False}
-    events = payload.get("events", [])
-    if not isinstance(events, list):
-        return {"ok": False}
-    sid = str(payload.get("sid", ""))[:16]
-    received = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with CLIENT_LOG.open("a", encoding="utf-8") as f:
-        for ev in events[:500]:
-            if isinstance(ev, dict):
-                f.write(json.dumps({"srv": received, "sid": sid, **ev},
-                                   ensure_ascii=False, default=str) + "\n")
-    return {"ok": True}
 
 
 @app.post("/api/library/refresh-favorites")

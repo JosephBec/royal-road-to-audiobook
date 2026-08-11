@@ -346,7 +346,6 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
             "complete": True,
             "total_duration": full_status["duration_seconds"] or 0.0,
             "file_ready": True,
-            "hls_complete": False,
             "segment_gap": gap,
         }
 
@@ -357,35 +356,8 @@ async def get_segments(chapter_id: int, db: Session = Depends(get_db)):
         "complete": synthesis_complete,
         "total_duration": total_duration,
         "file_ready": file_ready,
-        # Whether HLS alone can serve the WHOLE chapter. iOS clients prefer it
-        # for fully-rendered chapters: Safari refuses background network
-        # fetches for a paused progressive WAV, so lock-screen resume after a
-        # few minutes played a frozen 'zombie' — HLS is the transport iOS
-        # lets refetch in the background. Guarded against partial coverage
-        # (a 120s head start beside a separately-rendered full WAV).
-        "hls_complete": _hls_covers_chapter(
-            chapter_id, aac_count, seg_index, synthesis_complete, file_ready,
-            full_status["duration_seconds"]),
         "segment_gap": gap,
     }
-
-
-def _hls_covers_chapter(chapter_id: int, aac_count: int, seg_count: int,
-                        complete: bool, file_ready: bool,
-                        full_duration: float | None) -> bool:
-    """True when the AAC segments alone cover the entire chapter.
-
-    Coverage is judged by the durations recorded at encode time (the AACs
-    carry per-sentence gap padding the raw segment WAVs do not — comparing
-    WAV sums against the full file under-counted by the total gap time)."""
-    if aac_count == 0 or aac_count != seg_count or not complete:
-        return False
-    if file_ready and full_duration:
-        measured = recorded_segment_durations(chapter_id)
-        if not measured or len(measured) < aac_count:
-            return False
-        return sum(measured[:aac_count]) >= full_duration - 5.0
-    return True
 
 
 @router.get("/chapters/{chapter_id}/hls.m3u8")
@@ -426,15 +398,9 @@ async def get_hls_playlist(chapter_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No HLS segments yet")
 
     streaming = get_streaming_state(chapter_id)
-    status = get_chapter_status(chapter_id)
-    complete = status["ready"]
+    complete = get_chapter_status(chapter_id)["ready"]
     if streaming:
         complete = streaming.get("complete", False)
-    elif complete and status["duration_seconds"]:
-        # A full WAV existing doesn't mean the segments cover it — a 120s
-        # head start beside a separately-rendered full file would ENDLIST a
-        # two-minute playlist and truncate the chapter.
-        complete = sum(durations) >= status["duration_seconds"] - 5.0
 
     lines = [
         "#EXTM3U",
