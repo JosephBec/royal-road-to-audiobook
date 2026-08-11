@@ -1783,6 +1783,12 @@ function primeKeepalive() {
         keepaliveEl = new Audio('/static/silence.wav');
         keepaliveEl.loop = true;
         keepaliveEl.preload = 'auto';
+        // The loop is a playing element, so WebKit re-derives "playing" from
+        // it and flips the lock-screen toggle to ⏸ — the user then presses it
+        // expecting to stop the silence and instead resumes the chapter
+        // (client log 17:30, 2026-08-11). Re-declare the truth the moment the
+        // loop starts.
+        keepaliveEl.addEventListener('play', () => assertPausedState('kl:play'));
     }
     const p = keepaliveEl.play();
     if (!p) { keepalivePrimed = true; return; }
@@ -1794,13 +1800,27 @@ function primeKeepalive() {
     }).catch((e) => dlog('kl:prime-failed', { err: String(e) }));
 }
 
+let keepaliveAssertTimer = null;
+
+function assertPausedState(why) {
+    // WebKit periodically re-derives the Now Playing state from whichever
+    // element is playing; while that's the silence loop, keep overriding it
+    // with the truth so the lock screen shows ▶ for a paused chapter.
+    if (!state.audio.paused || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = 'paused';
+    dlog('kl:assert-paused', { why });
+}
+
 function startSilentKeepalive() {
     // Pause path: loop silence so iOS keeps the audio session — and with it
     // the Now Playing entry and command delivery — but not forever.
     if (!keepaliveEnabled() || !keepaliveEl) return;
     if (keepaliveEl.paused) {
-        keepaliveEl.play().then(() => dlog('kl:loop-ok'))
+        keepaliveEl.play().then(() => { dlog('kl:loop-ok'); assertPausedState('loop-ok'); })
                           .catch((e) => dlog('kl:loop-failed', { err: String(e) }));
+    }
+    if (!keepaliveAssertTimer) {
+        keepaliveAssertTimer = setInterval(() => assertPausedState('tick'), 5000);
     }
     if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
     keepaliveExpiry = setTimeout(() => { dlog('kl:expiry'); stopSilentKeepalive(); },
@@ -1809,6 +1829,7 @@ function startSilentKeepalive() {
 
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
+    if (keepaliveAssertTimer) { clearInterval(keepaliveAssertTimer); keepaliveAssertTimer = null; }
     if (keepaliveEl && !keepaliveEl.paused) {
         dlog('kl:stop');
         keepaliveEl.pause();
