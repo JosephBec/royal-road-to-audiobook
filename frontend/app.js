@@ -991,27 +991,28 @@ async function playInstantHls(chapterId) {
         state.audio.currentTime = Math.max(0, Math.min(startAt, Math.max(0, end - 1)));
     } catch (e) {}
 
+    // The seek above does not survive play(). For a playlist that is still
+    // growing, Safari commits its own start position when playback begins —
+    // the live edge — and silently discards wherever the playhead was put
+    // before. The cache rework made this deterministic instead of occasional:
+    // every chapter in the reading window holds exactly its first two
+    // minutes, so pressing play on a fresh chapter started at 2:00 sharp.
+    //
+    // The position therefore has to be enforced after playback starts, and
+    // the enforcement must be armed BEFORE play() is called. The first
+    // attempt at this fix subscribed to 'playing' after awaiting play(), and
+    // on iOS the event had already fired by the time the promise callback
+    // ran — the listener waited forever and the bug sailed through. Armed
+    // here, it cannot miss: whichever of 'playing' or 'timeupdate' arrives
+    // first does the correction, and it stands down only after seeing the
+    // playhead where it belongs twice in a row.
+    enforceStartPosition(chapterId, startAt);
+
     try {
         await state.audio.play();
     } catch (e) {}
     if (state.playback.chapter?.id !== chapterId) return;
 
-    // The seek above does not survive play(). For a playlist that is still
-    // growing, Safari commits its own start position when playback begins —
-    // the live edge — and silently discards wherever the playhead was put
-    // before. The cache rework made this deterministic instead of occasional:
-    // every chapter in the reading window now holds exactly its first two
-    // minutes, so pressing play on a fresh chapter started at 2:00 sharp,
-    // the live edge of its head start. (A cold chapter's edge was ~0 and a
-    // complete chapter's playlist is VOD, which is why it only used to bite
-    // when a render happened to be mid-flight.)
-    //
-    // So correct the position after playback has actually started, when a
-    // seek is honored, and re-check a few times because Safari can move the
-    // playhead again while the stream settles. The target is re-clamped to
-    // the seekable range each attempt: on a resume past what has rendered so
-    // far, the honest position is the end of what exists.
-    enforceStartPosition(chapterId, startAt);
 
     state.isSynthesizing = false;
     loadingEl.style.display = 'none';
@@ -1026,13 +1027,32 @@ async function playInstantHls(chapterId) {
 // granularity.
 const START_DRIFT_TOLERANCE_S = 2;
 const START_ENFORCE_ATTEMPTS = 5;
+// Consecutive observations at the right position before standing down.
+const START_STABLE_CONFIRMATIONS = 2;
 
+// Keep the playhead where playback was meant to start, against an HLS engine
+// that moves it to the live edge of a growing playlist when play() begins.
+//
+// Must be called BEFORE play(): it listens for both 'playing' and
+// 'timeupdate', so whichever the engine emits first triggers the check, and a
+// listener attached late cannot miss the moment (subscribing to 'playing'
+// after awaiting play() did exactly that — on iOS the event beat the promise
+// callback and the enforcement never ran).
+//
+// The target re-clamps to the seekable range on every check, so a resume
+// aimed past what has rendered settles at the end of what exists. Stands down
+// after the playhead is seen in place START_STABLE_CONFIRMATIONS times, or
+// after START_ENFORCE_ATTEMPTS corrections — never a seek war mid-listen.
 function enforceStartPosition(chapterId, startAt) {
     let attempts = 0;
-    const check = () => {
-        state.audio.removeEventListener('timeupdate', check);
-        if (state.playback.chapter?.id !== chapterId) return;   // moved on
-        if (attempts >= START_ENFORCE_ATTEMPTS) return;         // let it be
+    let stable = 0;
+    const detach = () => {
+        state.audio.removeEventListener('playing', onEvent);
+        state.audio.removeEventListener('timeupdate', onEvent);
+    };
+    const onEvent = () => {
+        if (state.playback.chapter?.id !== chapterId) return detach();
+        if (state.audio.paused) return;   // not actually playing yet
         let target = startAt;
         try {
             const seekable = state.audio.seekable;
@@ -1040,19 +1060,18 @@ function enforceStartPosition(chapterId, startAt) {
                 target = Math.min(target, Math.max(0, seekable.end(seekable.length - 1) - 0.5));
             }
         } catch (e) {}
-        if (Math.abs(state.audio.currentTime - target) > START_DRIFT_TOLERANCE_S) {
-            attempts += 1;
-            try { state.audio.currentTime = target; } catch (e) {}
-            state.audio.addEventListener('timeupdate', check);
+        if (Math.abs(state.audio.currentTime - target) <= START_DRIFT_TOLERANCE_S) {
+            stable += 1;
+            if (stable >= START_STABLE_CONFIRMATIONS) detach();
+            return;
         }
+        stable = 0;
+        attempts += 1;
+        if (attempts > START_ENFORCE_ATTEMPTS) return detach();
+        try { state.audio.currentTime = target; } catch (e) {}
     };
-    // 'playing' is the first moment a seek is honored rather than replaced by
-    // the engine's own choice of start position.
-    const onPlaying = () => {
-        state.audio.removeEventListener('playing', onPlaying);
-        check();
-    };
-    state.audio.addEventListener('playing', onPlaying);
+    state.audio.addEventListener('playing', onEvent);
+    state.audio.addEventListener('timeupdate', onEvent);
 }
 
 async function playInstantSegments(chapterId) {

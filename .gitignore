@@ -46,3 +46,4 @@ voices/*
 
 # stderr log from a manually-restarted server (tray merges into server.log)
 server.err.log
+snapshots/
