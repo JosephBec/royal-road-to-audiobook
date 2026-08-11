@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+import cache_policy
 from database import SessionLocal, Chapter, Progress
 import library_sync
 import prefetch
@@ -24,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 EXPORT_DIR = Path("./export_jobs")
 HEARTBEAT_WINDOW = 90  # seconds: progress update newer than this = active listener
-PREFETCH_DEPTH = 3
 
 _cancel_requested: set[int] = set()
 
@@ -38,10 +38,13 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 def _active_listener_debt(db) -> bool:
-    """True if any recently-active listener lacks current+next-3 cached audio.
+    """True if any recently-active listener is missing an opening they may need.
 
-    The existing after-play prefetch chain fills these files; the export
-    merely stays off the worker until they exist.
+    The cache sweep fills these; the export merely stays off the worker until
+    it has. The debt is measured against the head start, not a complete render:
+    nothing renders whole chapters in the background any more, so demanding a
+    finished WAV here would be a debt that could never be paid and an export
+    that could never start.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=HEARTBEAT_WINDOW)
     recent = db.query(Progress).filter(Progress.chapter_id.isnot(None)).all()
@@ -54,9 +57,9 @@ def _active_listener_debt(db) -> bool:
         needed = [current.id] + [
             c.id for c in db.query(Chapter)
             .filter(Chapter.novel_id == current.novel_id, Chapter.order > current.order)
-            .order_by(Chapter.order).limit(PREFETCH_DEPTH).all()
+            .order_by(Chapter.order).limit(cache_policy.LOOKAHEAD).all()
         ]
-        if any(not tts.temp_path_for_chapter(cid).exists() for cid in needed):
+        if any(not cache_policy.head_start_satisfied(cid) for cid in needed):
             return True
     return False
 

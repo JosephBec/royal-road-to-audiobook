@@ -4,6 +4,7 @@ Database models and session management.
 SQLite database with SQLAlchemy ORM for novels, chapters, progress, and settings.
 """
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,6 +18,8 @@ from sqlalchemy.orm import (
     DeclarativeBase, Session, sessionmaker, relationship
 )
 
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("NOVEL_TTS_DB", "sqlite:///./data.db")
 
@@ -276,36 +279,41 @@ def effective_settings(novel: "Novel", settings: "Settings") -> dict:
     }
 
 
-def retention_policy(db: Session) -> tuple[set[int], set[int]]:
-    """
-    Cache retention sets: (keep forever, keep while fresh).
+def ensure_progress(db: Session, novel: "Novel") -> Optional["Progress"]:
+    """Point a novel at its first chapter from the moment it is imported.
 
-    Forever: every novel's in-progress chapter, plus the next 3 chapters of
-    favorite novels (always ready for new releases). Expiring: the next 3
-    chapters of non-favorites — cached for binge sessions but deleted once
-    the audio file exceeds the retention window (see tts.RETENTION_SECONDS).
+    A missing Progress row used to mean "never opened", and every consumer had
+    to special-case it: the cache sweep guessed at the first chapter, the
+    library card showed no position, and the chapter list drew no current
+    marker. The guess was the same one everywhere, so the absent row carried no
+    information — it only made four callers reimplement one fallback. Creating
+    the row up front deletes the case instead of handling it.
+
+    `updated_at` stays NULL, and that is what still separates a book you have
+    never played from one you are reading. Both the priority ordering and the
+    export gate read it, and a synthetic "now" would make a book imported an
+    hour ago look like the one you were listening to a second ago.
+
+    Idempotent, and the caller commits.
     """
-    forever: set[int] = set()
-    expiring: set[int] = set()
-    for novel in db.query(Novel).filter(Novel.archived.is_(False)).all():
-        current_order = 0
-        prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
-        if prog and prog.chapter_id:
-            forever.add(prog.chapter_id)
-            ch = db.query(Chapter).filter(Chapter.id == prog.chapter_id).first()
-            if ch:
-                current_order = ch.order
-        next_ids = [
-            c.id for c in (
-                db.query(Chapter)
-                .filter(Chapter.novel_id == novel.id, Chapter.order > current_order)
-                .order_by(Chapter.order)
-                .limit(3)
-                .all()
-            )
-        ]
-        (forever if novel.favorite else expiring).update(next_ids)
-    return forever, expiring
+    progress = db.query(Progress).filter(Progress.novel_id == novel.id).first()
+    if progress is not None and progress.chapter_id is not None:
+        return progress
+
+    first = (db.query(Chapter).filter(Chapter.novel_id == novel.id)
+             .order_by(Chapter.order).first())
+    if first is None:
+        return progress          # no chapters yet; nothing to point at
+
+    if progress is None:
+        progress = Progress(novel_id=novel.id, chapter_id=first.id,
+                            position_seconds=0.0)
+        db.add(progress)
+        db.flush()               # the column default lands on the INSERT...
+    else:
+        progress.chapter_id = first.id
+    progress.updated_at = None   # ...and only an UPDATE can clear it again
+    return progress
 
 
 def init_db():
@@ -331,6 +339,20 @@ def init_db():
                 dirty = True
             if dirty:
                 db.commit()
+
+        # Every novel points at a chapter (see ensure_progress). Backfills
+        # libraries imported before that became an invariant, so nothing
+        # downstream has to keep handling the absent row.
+        pointed = 0
+        for novel in db.query(Novel).all():
+            existing = db.query(Progress).filter(Progress.novel_id == novel.id).first()
+            if existing is not None and existing.chapter_id is not None:
+                continue
+            if ensure_progress(db, novel) is not None:
+                pointed += 1
+        if pointed:
+            db.commit()
+            logger.info("Pointed %d novel(s) at their first chapter", pointed)
 
         # Heal libraries damaged by the old URL-keyed chapter dedup (see
         # chapter_repair). No-op once clean, so it is safe on every startup.

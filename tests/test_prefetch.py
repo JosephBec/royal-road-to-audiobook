@@ -1,8 +1,9 @@
-"""Single render-ahead worker: dedups, skips rendered chapters, runs cleanup.
+"""The cache sweep worker: renders the plan in order, and always terminates.
 
-No GPU/network — synthesis and scraping are faked.
+No GPU and no network — synthesis and scraping are faked.
 """
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -10,25 +11,27 @@ import pytest
 @pytest.fixture()
 def pf_env(tmp_path, monkeypatch):
     import database
-    import tts
     import prefetch
-    database.init_db()  # _fetch_text opens a session; no chapter rows → scrape path
+    import tts
+
+    database.init_db()
     monkeypatch.setattr(tts, "TEMP_DIR", tmp_path)
 
-    synth_calls = []
+    rendered = []
 
     async def fake_synth(chapter_id, text, voice, speed, engine_name=None,
                          chunk_voices=None, max_seconds=None,
                          yield_to_interactive=False):
-        synth_calls.append(chapter_id)
-        # The real streaming path writes the full file once it finishes.
-        tts.temp_path_for_chapter(chapter_id).write_bytes(b"wav")
+        rendered.append({"chapter_id": chapter_id, "max_seconds": max_seconds,
+                         "voice": voice, "engine": engine_name,
+                         "yield_to_interactive": yield_to_interactive})
+        # The real head start leaves this much audio recorded on disk, which is
+        # what makes the chapter satisfied and stops the sweep re-choosing it.
+        tts.record_segment_duration(chapter_id, 0, max_seconds or 999.0)
     monkeypatch.setattr(prefetch.tts, "synthesize_chapter_streaming", fake_synth)
 
     async def unexpected(*a, **k):
-        raise AssertionError(
-            "render-ahead must use the resumable streaming path, not "
-            "synthesize_chapter_to_file")
+        raise AssertionError("the sweep must never render a whole chapter")
     monkeypatch.setattr(prefetch.tts, "synthesize_chapter_to_file", unexpected)
 
     class FakeScraper:
@@ -40,147 +43,168 @@ def pf_env(tmp_path, monkeypatch):
         return
     monkeypatch.setattr(prefetch, "_wait_for_interactive_idle", no_wait)
 
-    cleanup_calls = []
-    monkeypatch.setattr(prefetch, "retention_policy", lambda db: (set(), set()))
+    cleanups = []
     monkeypatch.setattr(prefetch.tts, "cleanup_temp_files",
-                        lambda keep, expiring=None: cleanup_calls.append((keep, expiring)))
+                        lambda keep, expiring=None: cleanups.append((keep, expiring)))
 
     prefetch.reset()
-    return prefetch, tts, synth_calls, cleanup_calls, tmp_path
+    db = database.SessionLocal()
+    # Clean going in as well as coming out: the sweep plans over the whole
+    # library, so a novel another test module left behind would be swept too.
+    _wipe(db, database)
+    yield prefetch, tts, db, database, rendered, cleanups
+    _wipe(db, database)
+    db.close()
 
 
-def _targets(*ids):
-    return [(i, f"http://x/{i}", f"Chapter {i}") for i in ids]
+def _wipe(session, database):
+    session.query(database.Progress).delete()
+    session.query(database.Chapter).delete()
+    session.query(database.Novel).delete()
+    session.commit()
 
 
-def test_enqueue_dedups(pf_env):
-    prefetch, tts, synth_calls, _, _ = pf_env
-    prefetch.enqueue(_targets(1), "af_heart")
-    prefetch.enqueue(_targets(1), "af_heart")  # same id again
-    asyncio.run(prefetch.drain_once())
-    assert synth_calls == [1]
+def _reading(db, database, seed, chapters=10, at=5, favorite=False):
+    """A novel with the reader parked on chapter `at` (1-based)."""
+    novel = database.Novel(title=seed, rr_url=f"https://rr.test/{seed}",
+                           favorite=favorite)
+    db.add(novel)
+    db.flush()
+    rows = []
+    for order in range(1, chapters + 1):
+        ch = database.Chapter(novel_id=novel.id, title=f"{seed} c{order}",
+                              order=order, text=f"body {order}",
+                              rr_url=f"https://rr.test/{seed}/{order}")
+        db.add(ch)
+        rows.append(ch)
+    db.flush()
+    db.add(database.Progress(novel_id=novel.id, chapter_id=rows[at - 1].id,
+                             updated_at=datetime.now(timezone.utc)))
+    db.commit()
+    return novel, rows
 
 
-def test_skips_already_rendered(pf_env):
-    prefetch, tts, synth_calls, _, tmp_path = pf_env
-    tts.temp_path_for_chapter(7).write_bytes(b"already")
-    prefetch.enqueue(_targets(7), "af_heart")
-    asyncio.run(prefetch.drain_once())
-    assert synth_calls == []
+def test_sweep_renders_the_plan_in_priority_order(pf_env):
+    prefetch, tts, db, database, rendered, _ = pf_env
+    _, chs = _reading(db, database, "plan", at=5)
+
+    asyncio.run(prefetch.sweep_once())
+
+    assert [r["chapter_id"] for r in rendered] == [
+        chs[4].id, chs[5].id, chs[3].id, chs[6].id, chs[7].id]
 
 
-def test_processes_targets_in_order(pf_env):
-    prefetch, tts, synth_calls, _, _ = pf_env
-    prefetch.enqueue(_targets(1, 2, 3), "af_heart")
-    asyncio.run(prefetch.drain_once())
-    assert synth_calls == [1, 2, 3]
+def test_sweep_only_ever_renders_the_opening(pf_env):
+    """Nothing renders a whole chapter in the background any more.
 
-
-def test_runs_retention_cleanup_when_drained(pf_env):
-    prefetch, tts, synth_calls, cleanup_calls, _ = pf_env
-    prefetch.enqueue(_targets(1), "af_heart")
-    asyncio.run(prefetch.drain_once())
-    assert synth_calls == [1]
-    assert len(cleanup_calls) == 1
-
-
-def test_no_cleanup_when_nothing_queued(pf_env):
-    prefetch, tts, synth_calls, cleanup_calls, _ = pf_env
-    asyncio.run(prefetch.drain_once())
-    assert synth_calls == []
-    assert cleanup_calls == []
-
-
-def test_head_start_runs_before_render_ahead(pf_env, monkeypatch):
-    """The opening of the chapter being listened to outranks the whole of the
-    chapters that are not.
-
-    Pressing play enqueues the next three chapters, and each is rendered in
-    full — twenty minutes apiece at the throughput Chatterbox manages. With
-    the head start at the end of the drain, the first two minutes of the
-    chapter under the playhead sat behind an hour of work for chapters the
-    listener had not reached, so it was still cold when they pressed play.
+    A full render is twenty minutes of GPU for a chapter that may never be
+    opened, and it used to run ahead of the openings that actually shorten the
+    wait. Two minutes covers the model load and the first chunk; past that the
+    engine outruns playback.
     """
-    prefetch, tts, synth_calls, _, _ = pf_env
-    order = []
+    prefetch, tts, db, database, rendered, _ = pf_env
+    _reading(db, database, "cap", at=1)
 
-    async def fake_head_start():
-        order.append("head-start")
-    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+    asyncio.run(prefetch.sweep_once())
 
-    original = prefetch._process_one
-
-    async def tracking_process(item):
-        order.append(f"full-render:{item[0]}")
-        await original(item)
-    monkeypatch.setattr(prefetch, "_process_one", tracking_process)
-
-    prefetch.enqueue(_targets(1, 2, 3), "af_heart")
-    asyncio.run(prefetch.drain_once())
-
-    assert order == ["head-start", "full-render:1", "full-render:2", "full-render:3"]
+    import cache_policy
+    assert rendered, "something should have been rendered"
+    assert all(r["max_seconds"] == cache_policy.HEAD_START_SECONDS for r in rendered)
+    assert all(r["yield_to_interactive"] for r in rendered)
 
 
-def test_render_ahead_uses_the_resumable_path(pf_env):
-    """Render-ahead is the work most likely to be interrupted.
+def test_sweep_skips_chapters_that_already_have_their_opening(pf_env):
+    prefetch, tts, db, database, rendered, _ = pf_env
+    _, chs = _reading(db, database, "warm", at=1)
+    tts.record_segment_duration(chs[0].id, 0, 130.0)      # opening already there
+    tts.temp_path_for_chapter(chs[1].id).write_bytes(b"complete")
 
-    It runs unattended for hours, and synthesize_chapter_to_file renders a
-    whole chapter into memory before writing anything — twenty minutes of GPU
-    that a restart discards entirely, leaving the next attempt to start from
-    zero. The streaming path writes each segment as it goes and records a
-    fingerprint, so an interruption costs one chunk instead of a chapter.
+    asyncio.run(prefetch.sweep_once())
+
+    done = [r["chapter_id"] for r in rendered]
+    assert chs[0].id not in done and chs[1].id not in done
+    assert done == [chs[2].id, chs[3].id]
+
+
+def test_a_target_that_cannot_be_rendered_does_not_loop_forever(pf_env, monkeypatch):
+    """The sweep picks targets by "does this chapter have its opening yet".
+
+    A render that ends without producing one — a scrape that fails, a synthesis
+    error — answers no, so the planner would hand back the same chapter on the
+    next iteration and the worker would spin on it for as long as the process
+    lived. Confirming the outcome against the planner's own condition is what
+    bounds the loop.
     """
-    prefetch, tts, synth_calls, _, _ = pf_env
-    resumable_args = {}
+    prefetch, tts, db, database, rendered, _ = pf_env
+    _reading(db, database, "broken", at=1)
 
-    async def capture(chapter_id, text, voice, speed, engine_name=None,
-                      chunk_voices=None, max_seconds=None,
-                      yield_to_interactive=False):
-        synth_calls.append(chapter_id)
-        resumable_args.update(max_seconds=max_seconds,
-                              yield_to_interactive=yield_to_interactive)
-        tts.temp_path_for_chapter(chapter_id).write_bytes(b"wav")
-    prefetch.tts.synthesize_chapter_streaming = capture
+    async def produces_nothing(chapter_id, text, voice, speed, engine_name=None,
+                               chunk_voices=None, max_seconds=None,
+                               yield_to_interactive=False):
+        rendered.append({"chapter_id": chapter_id})
+    monkeypatch.setattr(prefetch.tts, "synthesize_chapter_streaming",
+                        produces_nothing)
 
-    prefetch.enqueue(_targets(1), "af_heart")
-    asyncio.run(prefetch.drain_once())
+    async def bounded():
+        return await asyncio.wait_for(prefetch.sweep_once(), timeout=5)
+    assert asyncio.run(bounded()) == 0
 
-    assert synth_calls == [1]
-    # No cap: render-ahead wants the whole chapter, unlike the head start.
-    assert resumable_args["max_seconds"] is None
-    # And it must step aside for anything the listener is waiting on.
-    assert resumable_args["yield_to_interactive"] is True
+    attempts = [r["chapter_id"] for r in rendered]
+    assert len(attempts) == len(set(attempts)), "each target attempted once per pass"
 
 
-def test_drain_once_does_nothing_when_nothing_is_queued(pf_env, monkeypatch):
-    """drain_once is the queued-work path; the idle sweep is the worker loop's."""
-    prefetch, _, _, _, _ = pf_env
-    calls = []
+def test_a_scrape_failure_defers_the_chapter(pf_env, monkeypatch):
+    prefetch, tts, db, database, rendered, _ = pf_env
+    _reading(db, database, "noscrape", at=1)
+    for ch in db.query(database.Chapter).all():
+        ch.text = None
+    db.commit()
+    monkeypatch.setattr(prefetch, "get_scraper_for_url", lambda url: None)
 
-    async def fake_head_start():
-        calls.append(1)
-    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+    async def bounded():
+        return await asyncio.wait_for(prefetch.sweep_once(), timeout=5)
 
-    asyncio.run(prefetch.drain_once())
-    assert calls == []
+    assert asyncio.run(bounded()) == 0
+    assert rendered == []
 
 
-def test_idle_worker_runs_the_head_start(pf_env, monkeypatch):
-    """Nothing enqueues on a quiet server.
+def test_retention_runs_after_the_sweep(pf_env):
+    prefetch, tts, db, database, rendered, cleanups = pf_env
+    _, chs = _reading(db, database, "retain", at=5)
 
-    Waiting only on the queue parked the worker indefinitely, so the head
-    start never ran until something else happened to queue work — and idle
-    time is exactly when it should be running, since its whole purpose is to
-    have the opening ready before play is pressed.
-    """
-    prefetch, _, _, _, _ = pf_env
-    calls = []
+    asyncio.run(prefetch.sweep_once())
 
-    async def fake_head_start():
-        calls.append(1)
-        if len(calls) >= 2:
-            raise asyncio.CancelledError  # let the loop exit
-    monkeypatch.setattr(prefetch, "head_start_pass", fake_head_start)
+    assert len(cleanups) == 1
+    keep, _expiring = cleanups[0]
+    assert chs[4].id in keep
+
+
+def test_retention_protects_a_chapter_that_is_still_rendering(pf_env, monkeypatch):
+    """Progress lands after playback starts, so a chapter can be mid-render and
+    not yet anywhere in the plan. Sweeping its segments away mid-render leaves
+    a chapter that is half one take and half another."""
+    prefetch, tts, db, database, rendered, cleanups = pf_env
+    _reading(db, database, "inflight", at=5)
+    monkeypatch.setattr(tts, "active_chapter_ids", lambda: {999_111})
+
+    asyncio.run(prefetch.sweep_once())
+
+    keep, _ = cleanups[0]
+    assert 999_111 in keep
+
+
+def test_the_worker_sweeps_on_an_idle_tick(pf_env, monkeypatch):
+    """Nothing enqueues on a quiet server, and idle time is exactly when this
+    work should happen — its whole purpose is to be done before play is pressed."""
+    prefetch, *_ = pf_env
+    passes = []
+
+    async def fake_sweep():
+        passes.append(1)
+        if len(passes) >= 2:
+            raise asyncio.CancelledError
+        return 0
+    monkeypatch.setattr(prefetch, "sweep_once", fake_sweep)
     monkeypatch.setattr(prefetch, "IDLE_TICK_SECONDS", 0.01)
 
     async def run():
@@ -188,37 +212,31 @@ def test_idle_worker_runs_the_head_start(pf_env, monkeypatch):
             await prefetch._worker_loop()
     asyncio.run(run())
 
-    assert len(calls) == 2, "idle worker should sweep on every tick"
+    assert len(passes) == 2
 
 
-def test_head_start_skips_a_chapter_that_already_has_one(pf_env, monkeypatch):
-    """The idle sweep must be free for chapters already done.
+def test_request_sweep_does_not_wait_for_the_tick(pf_env, monkeypatch):
+    prefetch, *_ = pf_env
+    passes = []
 
-    Re-entering the render to discover there is nothing to do is not free:
-    resuming deliberately drops the last segment as possibly truncated, so
-    every tick would discard a segment and render it again.
-    """
-    prefetch, tts, _, _, _ = pf_env
-    fp = {"text": "t", "engine": "chatterbox", "voice": "v", "chunks": 3}
-    for index, seconds in enumerate((60.0, 60.0, 30.0)):
-        tts.record_segment_duration(99, index, seconds, fp)
+    async def fake_sweep():
+        passes.append(1)
+        raise asyncio.CancelledError
+    monkeypatch.setattr(prefetch, "sweep_once", fake_sweep)
+    monkeypatch.setattr(prefetch, "IDLE_TICK_SECONDS", 30)   # far longer than the test
 
-    assert prefetch._head_start_satisfied(99) is True
-    assert prefetch._head_start_satisfied(1234) is False  # nothing on disk
+    async def run():
+        prefetch.request_sweep()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(prefetch._worker_loop(), timeout=2)
+    asyncio.run(run())
 
-
-def test_head_start_not_satisfied_by_a_partial_opening(pf_env):
-    """Half a head start is not a head start; the sweep should finish it."""
-    prefetch, tts, _, _, _ = pf_env
-    fp = {"text": "t", "engine": "chatterbox", "voice": "v", "chunks": 2}
-    tts.record_segment_duration(98, 0, 30.0, fp)
-
-    assert prefetch._head_start_satisfied(98) is False
+    assert passes == [1]
 
 
-def test_is_busy_false_after_drain(pf_env):
-    prefetch, tts, synth_calls, _, _ = pf_env
-    prefetch.enqueue(_targets(1, 2), "af_heart")
-    assert prefetch.is_busy() is True
-    asyncio.run(prefetch.drain_once())
+def test_is_busy_reflects_pending_and_active_work(pf_env):
+    prefetch, *_ = pf_env
+
     assert prefetch.is_busy() is False
+    prefetch.request_sweep()
+    assert prefetch.is_busy() is True, "a requested sweep is work the export waits on"

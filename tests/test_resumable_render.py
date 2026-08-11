@@ -397,12 +397,16 @@ def test_foreground_render_does_not_yield(fake_engine, temp_dir, monkeypatch):
 
 
 def test_head_start_covers_a_never_opened_novel(monkeypatch, temp_dir):
-    """A novel with no saved progress is the one guaranteed to be cold.
+    """A novel nobody has played is the one guaranteed to be cold.
 
-    Requiring a progress row meant the first play of a brand-new book always
-    paid the full model-load cost — exactly the case the head start exists for.
+    This used to need a special case, because "no progress row" meant "never
+    opened" and the sweep had to guess the reader was on chapter one. Importing
+    now records that guess as a fact (see database.ensure_progress), so the
+    ordinary window covers the case and there is nothing left to special-case —
+    but the behaviour it protected still has to hold.
     """
     import asyncio
+    import cache_policy
     import database
     import prefetch
 
@@ -417,6 +421,8 @@ def test_head_start_covers_a_never_opened_novel(monkeypatch, temp_dir):
             rr_url=f"https://example.com/fiction/7777/x/chapter/{order}",
             text="Some body text for the chapter."))
     db.commit()
+    database.ensure_progress(db, novel)   # what an import does
+    db.commit()
     novel_id = novel.id
     first_id = (db.query(database.Chapter)
                 .filter(database.Chapter.novel_id == novel_id)
@@ -428,18 +434,20 @@ def test_head_start_covers_a_never_opened_novel(monkeypatch, temp_dir):
     async def fake_stream(chapter_id, text, voice, speed, engine_name,
                           chunk_voices=None, max_seconds=None, **kw):
         started.append((chapter_id, max_seconds))
+        tts.record_segment_duration(chapter_id, 0, max_seconds or 999.0)
 
     monkeypatch.setattr(prefetch.tts, "synthesize_chapter_streaming", fake_stream)
-    monkeypatch.setattr(prefetch.tts, "temp_path_for_chapter",
-                        lambda cid: temp_dir / f"absent_{cid}.wav")
+    monkeypatch.setattr(prefetch.tts, "cleanup_temp_files",
+                        lambda keep, expiring=None: None)
 
-    asyncio.run(prefetch.head_start_pass())
+    asyncio.run(asyncio.wait_for(prefetch.sweep_once(), timeout=10))
 
     assert first_id in [c for c, _ in started], \
         "the first chapter of an unopened novel should get a head start"
-    assert all(m == prefetch.HEAD_START_SECONDS for _, m in started)
+    assert all(m == cache_policy.HEAD_START_SECONDS for _, m in started)
 
     db = database.SessionLocal()
+    db.query(database.Progress).filter(database.Progress.novel_id == novel_id).delete()
     db.delete(db.query(database.Novel).filter(database.Novel.id == novel_id).first())
     db.commit()
     db.close()

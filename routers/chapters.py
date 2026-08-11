@@ -15,9 +15,10 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+import cache_policy
 from database import (
     get_db, Novel, Chapter, Settings, Progress,
-    effective_settings, retention_policy, SessionLocal,
+    effective_settings, SessionLocal,
 )
 import prefetch
 import text_rules
@@ -25,7 +26,7 @@ from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
     get_chapter_status, get_streaming_state,
-    cleanup_temp_files, interactive_synthesis, is_rendering,
+    cleanup_temp_files, interactive_synthesis, is_rendering, active_chapter_ids,
     temp_path_for_chapter, _segment_path,
     _aac_segment_path, SEGMENT_GAP_SECONDS, segment_gap_for,
     segment_durations as recorded_segment_durations,
@@ -213,48 +214,23 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
     voice, engine_name = eff["voice"], eff["engine"]
     playback_mode = settings.playback_mode if settings else "full"
 
-    # Gather all DB data we need BEFORE launching background tasks
-    # (the DB session will be closed when the request returns)
-    next_chapters = (
-        db.query(Chapter)
-        .filter(Chapter.novel_id == chapter.novel_id, Chapter.order > chapter.order)
-        .order_by(Chapter.order)
-        .limit(3)
-        .all()
-    )
-    prev_ch = (
-        db.query(Chapter)
-        .filter(Chapter.novel_id == chapter.novel_id, Chapter.order == chapter.order - 1)
-        .first()
-    )
-
-    # Pre-compute the set of chapter IDs to keep
-    keep_ids = {chapter_id}
-    if prev_ch:
-        keep_ids.add(prev_ch.id)
-    for nch in next_chapters:
-        keep_ids.add(nch.id)
-    # Keep every novel's in-progress chapter cached so resuming is instant
-    keep_ids |= {
-        p.chapter_id
-        for p in db.query(Progress).filter(Progress.chapter_id.isnot(None)).all()
-    }
-
-    # Extract prefetch target info (next 3 chapters)
-    prefetch_targets = [(c.id, c.rr_url, c.title) for c in next_chapters]
-
     async def _after_synthesis():
-        """Queue the next chapters for render-ahead, then apply retention cleanup."""
-        # Single prefetch worker owns render-ahead; it dedups against the
-        # favorites sync so a chapter is never synthesized twice.
-        prefetch.enqueue(prefetch_targets, voice, engine_name)
+        """Re-plan the cache around where the listener now is, then sweep.
+
+        This used to compute its own keep set and prefetch targets, duplicating
+        the window definition that cache_policy owns — two answers to one
+        question, which is how the cache ended up full of chapters nobody had
+        reached. It only needs to say that something moved.
+        """
+        prefetch.request_sweep()
         db2 = SessionLocal()
         try:
-            forever, expiring = retention_policy(db2)
+            keep, expiring = cache_policy.retention_sets(db2)
         finally:
             db2.close()
-        # keep_ids protects the active listening window even before progress lands
-        cleanup_temp_files(keep_ids | forever, expiring)
+        # The chapter just played may not be in saved progress yet, so protect
+        # whatever is actually rendering (see tts.active_chapter_ids).
+        cleanup_temp_files(keep | active_chapter_ids() | {chapter_id}, expiring)
 
     # If this chapter is already synthesized, still run the after-step:
     # the prefetch chain used to break here, leaving autoplay with a cold

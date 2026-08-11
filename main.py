@@ -25,7 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
-from database import init_db, SessionLocal, retention_policy
+import cache_policy
+from database import init_db, SessionLocal
 from routers import (novels, chapters, progress, settings, exports, epubs,
                      characters, text_rules_api)
 from tts import cleanup_temp_files
@@ -59,14 +60,15 @@ STARTED_AT: datetime | None = None
 
 
 def _retention_cleanup():
-    """Apply the retention policy: in-progress chapters and favorites' next-3
-    kept forever, non-favorites' next-3 kept while fresh, the rest deleted."""
+    """Apply the retention policy: the reading window kept, the few chapters
+    just behind it kept while fresh, everything else deleted (see
+    cache_policy.retention_sets)."""
     db = SessionLocal()
     try:
-        forever, expiring = retention_policy(db)
+        keep, expiring = cache_policy.retention_sets(db)
     finally:
         db.close()
-    cleanup_temp_files(forever, expiring)
+    cleanup_temp_files(keep, expiring)
 
 
 @asynccontextmanager

@@ -73,15 +73,29 @@ def test_file_still_copying_is_not_registered(env):
     assert len(_epub_novels()) == 1
 
 
+def _reading(novel_id, chapter_id):
+    """Move the reader onto a chapter.
+
+    Registration already gave the novel a Progress row pointing at chapter one
+    (see database.ensure_progress), so this updates rather than inserts.
+    """
+    import database
+    db = database.SessionLocal()
+    prog = db.query(database.Progress).filter_by(novel_id=novel_id).first()
+    if prog is None:
+        prog = database.Progress(novel_id=novel_id)
+        db.add(prog)
+    prog.chapter_id = chapter_id
+    db.commit(); db.close()
+
+
 def test_removed_file_deletes_novel_progress_and_audio(env):
     lib, removed_audio = env
     make_epub(lib / "Gone.epub", cover=COVER_BYTES)
     _sync(); _sync()
     novel = _epub_novels()[0]
     import database
-    db = database.SessionLocal()
-    db.add(database.Progress(novel_id=novel["id"], chapter_id=novel["chapter_ids"][0]))
-    db.commit(); db.close()
+    _reading(novel["id"], novel["chapter_ids"][0])
 
     (lib / "Gone.epub").unlink()
     _sync()
@@ -100,9 +114,7 @@ def test_replaced_file_resyncs_chapters_keeps_progress(env):
     _sync(); _sync()
     novel = _epub_novels()[0]
     import database
-    db = database.SessionLocal()
-    db.add(database.Progress(novel_id=novel["id"], chapter_id=novel["chapter_ids"][1]))
-    db.commit(); db.close()
+    _reading(novel["id"], novel["chapter_ids"][1])
 
     make_epub(lib / "Series.epub",
               chapters=[("Ch 1", [LONG_PARA]), ("Ch 2", [LONG_PARA]), ("Ch 3", [LONG_PARA])])

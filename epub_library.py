@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from database import SessionLocal, Novel, Chapter
+from database import SessionLocal, Novel, Chapter, ensure_progress
 from library_sync import sync_chapter_list
 from scrapers import epub_local
 from tts import remove_chapter_audio
@@ -219,6 +219,9 @@ async def _register(db, filename: str):
         ))
     novel.total_chapters = len(parsed.chapters)
     novel.last_refreshed = datetime.now(timezone.utc)
+    # Same as a novel added by URL: it starts on its first chapter.
+    db.flush()
+    ensure_progress(db, novel)
     db.commit()
     logger.info("Registered EPUB: %s (%d chapters)", parsed.title, novel.total_chapters)
 

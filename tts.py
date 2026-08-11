@@ -34,8 +34,14 @@ logger = logging.getLogger(__name__)
 # (voice demos, export assembly) import it; use engine.sample_rate when the
 # engine is known.
 SAMPLE_RATE = 24000
-TEMP_DIR = Path("./temp_audio")
-TEMP_DIR.mkdir(exist_ok=True)
+# Overridable so the test suite can be pointed somewhere disposable. It is not
+# a convenience: retention deletes every chapter file it does not recognise,
+# and a test database has no novels in it, so any test that starts the app
+# against the real directory wipes the entire audio cache. That is hours of
+# rendering, and it happened silently for months — the losses were blamed on
+# server restarts. See tests/conftest.py.
+TEMP_DIR = Path(os.environ.get("NOVEL_TTS_TEMP_AUDIO", "./temp_audio"))
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # Fallback inter-segment silence. The real value is per engine+voice via
 # segment_gap_for(); this is only used where no voice context exists.
@@ -390,6 +396,31 @@ def record_segment_duration(chapter_id: int, index: int, duration: float,
     if fingerprint is not None:
         data["fingerprint"] = fingerprint
     _write_sidecar(chapter_id, data)
+
+
+def rendered_seconds(chapter_id: int) -> float:
+    """How much audio a partial render has already produced.
+
+    Read from the sidecar rather than measured, because the point is to answer
+    "is there enough here to start on" without opening a single audio file.
+    """
+    durations = _read_sidecar(chapter_id).get("durations") or []
+    return sum(d for d in durations if d)
+
+
+def active_chapter_ids() -> set[int]:
+    """Chapters a render currently owns, which retention must never touch.
+
+    Retention derives its keep set from saved progress, and progress lands
+    *after* playback starts — so there is a window where a chapter is being
+    rendered and is not yet in the plan. Deleting its segments mid-render
+    leaves a chapter that is half one take and half another, which is worse
+    than either having it or not.
+    """
+    active = {cid for cid, lock in _synth_locks.items() if lock.locked()}
+    active |= {cid for cid, state in _streaming_state.items()
+               if not state.get("complete")}
+    return active
 
 
 def segment_durations(chapter_id: int) -> list[float] | None:

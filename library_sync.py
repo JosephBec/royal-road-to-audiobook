@@ -2,9 +2,12 @@
 Background favorites pipeline.
 
 Triggered from the frontend on every page load (cooldown-limited): re-crawls
-each favorite novel for new chapters, then pre-downloads the next 3 chapters
-from each favorite's saved progress so new releases are always ready to play.
-Yields to any synthesis the user is actively waiting on.
+each favorite novel for new chapters, applies retention, and asks the cache
+sweep to re-plan — a new release of a favourite you are caught up with is the
+one thing that outranks everything else on the GPU (see cache_policy).
+
+Finding chapters and rendering them are deliberately separate jobs here. This
+one only discovers.
 """
 
 import asyncio
@@ -12,10 +15,8 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from database import (
-    SessionLocal, Novel, Chapter, Progress, Settings,
-    effective_settings, retention_policy,
-)
+import cache_policy
+from database import SessionLocal, Novel, Chapter, ensure_progress
 from scrapers import get_scraper_for_url
 import prefetch
 import tts
@@ -23,7 +24,6 @@ import tts
 logger = logging.getLogger(__name__)
 
 COOLDOWN_SECONDS = 600  # at most one full sync per 10 minutes
-PREFETCH_DEPTH = 3
 
 _last_run = 0.0
 _task: asyncio.Task | None = None
@@ -110,6 +110,10 @@ def sync_chapter_list(db, novel: Novel, chapter_list: list[dict]) -> int:
     # never drop below them.
     novel.total_chapters = len(existing_urls)
     novel.last_refreshed = datetime.now(timezone.utc)
+    # A novel imported while the site was down has no chapters and so no
+    # current chapter; the first successful crawl is when it can finally get
+    # one. No-op for every novel that already has one.
+    ensure_progress(db, novel)
     db.commit()
     return new_count
 
@@ -131,11 +135,16 @@ async def _run():
 
     db = SessionLocal()
     try:
-        forever, expiring = retention_policy(db)
+        keep, expiring = cache_policy.retention_sets(db)
     finally:
         db.close()
-    tts.cleanup_temp_files(forever, expiring)
+    tts.cleanup_temp_files(keep, expiring)
     logger.info("Favorites sync complete (%d favorites)", len(favorite_ids))
+
+    # New chapters may have landed, which is the one event that can put a
+    # favourite's new release at the top of the plan. Ask for a sweep now
+    # rather than waiting out the idle tick.
+    prefetch.request_sweep()
 
     # Cache any chapter text that is still missing. Chapter text is only stored
     # as a side effect of playing or prefetching, so everything behind the
@@ -151,6 +160,13 @@ async def _run():
 
 
 async def _sync_novel(novel_id: int):
+    """Crawl one favourite for new chapters. Rendering is not this job.
+
+    This used to pick the next three chapters and queue them itself, which
+    meant the crawl held an opinion about caching that could disagree with the
+    sweep's. It only has to find the chapters; cache_policy decides what any of
+    that is worth rendering.
+    """
     db = SessionLocal()
     try:
         novel = db.query(Novel).filter(Novel.id == novel_id).first()
@@ -161,8 +177,6 @@ async def _sync_novel(novel_id: int):
         if not scraper:
             logger.warning("No scraper for favorite %s, skipping", title)
             return
-
-        # 1. Look for new chapters
         try:
             chapter_list = await scraper.scrape_chapter_list(novel.rr_url)
             new_count = sync_chapter_list(db, novel, chapter_list)
@@ -170,28 +184,5 @@ async def _sync_novel(novel_id: int):
                 logger.info("Favorite %s: %d new chapter(s)", title, new_count)
         except Exception as e:
             logger.warning("Chapter refresh failed for favorite %s: %s", title, e)
-
-        # 2. Determine the next chapters from saved progress
-        settings = db.query(Settings).first()
-        eff = effective_settings(novel, settings)
-        voice, engine_name = eff["voice"], eff["engine"]
-        current_order = 0
-        prog = db.query(Progress).filter(Progress.novel_id == novel.id).first()
-        if prog and prog.chapter_id:
-            ch = db.query(Chapter).filter(Chapter.id == prog.chapter_id).first()
-            if ch:
-                current_order = ch.order
-        targets = (
-            db.query(Chapter)
-            .filter(Chapter.novel_id == novel.id, Chapter.order > current_order)
-            .order_by(Chapter.order)
-            .limit(PREFETCH_DEPTH)
-            .all()
-        )
-        target_data = [(c.id, c.rr_url, c.title) for c in targets]
     finally:
         db.close()
-
-    # 3. Hand render-ahead to the single prefetch worker (dedups against
-    #    playback-triggered prefetch so nothing is synthesized twice).
-    prefetch.enqueue(target_data, voice, engine_name)

@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from database import get_db, Novel, Chapter, Progress, Settings, effective_settings
+from database import (get_db, Novel, Chapter, Progress, Settings,
+                      effective_settings, ensure_progress)
 from scrapers import get_scraper_for_url, supported_sites
 from tts import remove_chapter_audio
 
@@ -187,6 +188,11 @@ async def add_novel(req: AddNovelRequest, db: Session = Depends(get_db)):
 
     novel.total_chapters = len(chapter_list)
     novel.last_refreshed = datetime.now(timezone.utc)
+    # A book you have just added is "on chapter one" — that is what you would
+    # press play on, and saying so up front is what lets the cache sweep get
+    # its opening ready before you do.
+    db.flush()
+    ensure_progress(db, novel)
     db.commit()
     db.refresh(novel)
 
