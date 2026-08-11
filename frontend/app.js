@@ -1667,8 +1667,12 @@ function updateMediaSession() {
 // item, its frozen timeline stays honest, and a button press means exactly
 // what it says.
 //
-// Still opt-in and stored per device: a silent render loop costs a trickle of
-// battery, and only iOS needs it.
+// On by default, opt-out per device. It was opt-in, which meant every new
+// device (and the home-screen web app, whose localStorage starts empty) shipped
+// with dead lock-screen resume until someone found the checkbox: first pause
+// from the lock screen let iOS deactivate the session within seconds, leaving
+// a grayed-out "Not Playing" that ignored the play button. The cost of the
+// loop is a trickle of battery for at most 45 minutes after a pause.
 
 const KEEPALIVE_KEY = 'iosKeepSessionAlive';
 // Stop holding the session open after this long. The bug only bites for a
@@ -1679,7 +1683,7 @@ let keepaliveCtx = null;       // AudioContext with a looping silent source
 let keepaliveExpiry = null;
 
 function keepaliveEnabled() {
-    return localStorage.getItem(KEEPALIVE_KEY) === '1';
+    return localStorage.getItem(KEEPALIVE_KEY) !== '0';
 }
 
 function prepareSilentKeepalive() {

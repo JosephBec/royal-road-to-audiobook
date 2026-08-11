@@ -118,9 +118,13 @@ html, body {
     overflow-x: hidden;
 }
 
+/* viewport-fit=cover lets the page extend under the iPhone status bar and
+   home indicator (needed for the home-screen web app, where there is no
+   browser chrome); the env() insets give that space back to the fixed bars.
+   In a normal browser tab the insets are ~0 and nothing changes. */
 body {
-    padding-top: var(--topbar-height);
-    padding-bottom: var(--player-height);
+    padding-top: calc(var(--topbar-height) + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(var(--player-height) + env(safe-area-inset-bottom, 0px));
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -136,8 +140,8 @@ a:hover { color: var(--accent-hover); }
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: var(--topbar-height);
-    padding: 0 24px;
+    height: calc(var(--topbar-height) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 24px 0;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
     backdrop-filter: blur(12px);
@@ -787,7 +791,7 @@ a:hover { color: var(--accent-hover); }
     -webkit-backface-visibility: hidden;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border);
-    padding: 8px 24px;
+    padding: 8px 24px calc(8px + env(safe-area-inset-bottom, 0px));
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1503,7 +1507,7 @@ a:hover { color: var(--accent-hover); }
 /* ===== Toast ===== */
 .toast {
     position: fixed;
-    bottom: calc(var(--player-height) + 16px);
+    bottom: calc(var(--player-height) + env(safe-area-inset-bottom, 0px) + 16px);
     left: 50%;
     transform: translateX(-50%);
     background: var(--bg-card);
@@ -1569,7 +1573,7 @@ a:hover { color: var(--accent-hover); }
     }
     .novel-header { flex-direction: column; }
     .novel-info { flex-direction: column; align-items: center; text-align: center; }
-    #mini-player { padding: 6px 12px; }
+    #mini-player { padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); }
     .player-controls { gap: 8px; }
     .chapter-row { padding: 10px 8px; gap: 8px; }
 
