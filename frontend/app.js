@@ -28,6 +28,10 @@ const state = {
     },
     isPlaying: false,
     isSynthesizing: false,
+    // True only between the element's 'playing' event and its next source
+    // change: audio has genuinely come out of the current src. This is the
+    // gate on saving progress — see saveProgress.
+    playbackHeard: false,
     audio: new Audio(),
     progressInterval: null,
     saveInterval: null,
@@ -512,6 +516,12 @@ async function openNovel(novelId, opts = {}) {
 
     updateFavoriteButton();
 
+    // Hide the resume button until THIS novel's progress arrives. It keeps
+    // its last contents otherwise, and the chapter load plus the favorites
+    // refresh can take seconds — long enough to read "Resume — Ch. 4" from
+    // whatever novel was open before and believe it.
+    document.getElementById('btn-resume').style.display = 'none';
+
     // Source site link (opens the scraped page in a new tab). EPUBs have an
     // epub:// pseudo-URL with no web page, so show a plain label instead.
     const isWebNovel = /^https?:\/\//.test(novel.rr_url || '');
@@ -928,8 +938,8 @@ async function playInstantHls(chapterId) {
 
     // Wait for the first AAC segment (or fall back if the chapter is already
     // synthesized, or AAC encoding is unavailable on the server)
+    let segData = null;   // last poll survives the loop: it knows how much audio exists
     while (state.playback.chapter?.id === chapterId) {
-        let segData;
         try {
             segData = await api('GET', `/api/chapters/${chapterId}/segments`);
         } catch (e) {
@@ -978,6 +988,19 @@ async function playInstantHls(chapterId) {
         }
     } catch (e) {}
 
+    // A resume can point past what has rendered so far — the chapter holds a
+    // two-minute head start and the listener stopped at 2:15. Aiming there
+    // parks Safari at the live edge waiting for segments that arrive at
+    // render speed: long silence with no explanation, which reads as broken.
+    // Aim a little inside the rendered audio instead — playback starts
+    // immediately, re-hearing a few seconds, and rolls into new segments as
+    // they land. Server truth, not audio.seekable, which is often still
+    // empty at this point.
+    if (segData && !segData.complete && segData.total_duration > 0) {
+        startAt = Math.min(startAt,
+                           Math.max(0, segData.total_duration - RESUME_EDGE_MARGIN_S));
+    }
+
     await new Promise(resolve => {
         if (state.audio.readyState >= 1) return resolve();
         const done = () => { state.audio.removeEventListener('loadedmetadata', done); resolve(); };
@@ -987,8 +1010,16 @@ async function playInstantHls(chapterId) {
     if (state.playback.chapter?.id !== chapterId) return;
     try {
         const seekable = state.audio.seekable;
-        const end = seekable && seekable.length ? seekable.end(seekable.length - 1) : 0;
-        state.audio.currentTime = Math.max(0, Math.min(startAt, Math.max(0, end - 1)));
+        if (seekable && seekable.length) {
+            const end = seekable.end(seekable.length - 1);
+            state.audio.currentTime = Math.max(0, Math.min(startAt, Math.max(0, end - 1)));
+        } else if (startAt > 0) {
+            // Seekable is often still empty here. The old clamp treated that
+            // as end = 0 and seeked a resume to zero — ask for the real
+            // target instead and let the enforcement below correct whatever
+            // the engine does with it.
+            state.audio.currentTime = startAt;
+        }
     } catch (e) {}
 
     // The seek above does not survive play(). For a playlist that is still
@@ -1029,6 +1060,10 @@ const START_DRIFT_TOLERANCE_S = 2;
 const START_ENFORCE_ATTEMPTS = 5;
 // Consecutive observations at the right position before standing down.
 const START_STABLE_CONFIRMATIONS = 2;
+// How far inside the rendered audio a resume aims when the saved position is
+// at or past the rendered edge. Re-hearing a few seconds beats waiting in
+// silence for the render to reach the exact spot.
+const RESUME_EDGE_MARGIN_S = 8;
 
 // Keep the playhead where playback was meant to start, against an HLS engine
 // that moves it to the live edge of a growing playlist when play() begins.
@@ -1362,6 +1397,20 @@ function setupAudioEvents() {
     audio.addEventListener('seeked', updatePositionState);
     audio.addEventListener('ratechange', updatePositionState);
 
+    // Track whether audio has actually been produced from the current source.
+    // 'playing' fires when rendering truly starts — not when play() is called,
+    // which also flips isPlaying on a stream that then stalls silently.
+    // 'loadstart' fires on every source change, closing the window.
+    audio.addEventListener('playing', () => {
+        state.playbackHeard = true;
+        // First trustworthy moment to mark this chapter as the current one —
+        // the kickoff save this replaces ran before audio existed and could
+        // write a stall's unsettled position over a real one. Skipped during
+        // segment playback, where 'playing' fires once per sentence.
+        if (!state._instantActive) saveProgress();
+    });
+    audio.addEventListener('loadstart', () => { state.playbackHeard = false; });
+
     audio.addEventListener('canplay', () => {
         if (state._instantActive) return;  // handled by segment logic
         loadingEl.style.display = 'none';
@@ -1582,6 +1631,13 @@ async function saveProgress() {
     const novelId = state.playback.novel?.id;
     const chapterId = state.playback.chapter?.id;
     if (!novelId || !chapterId) return;
+    // Only record positions the listener has actually heard. Kicking off a
+    // stream calls saveProgress while the playhead is still wherever loading
+    // left it — and if the stream then stalls (a resume aimed past the
+    // rendered audio waits at the live edge in silence), that unsettled
+    // number is what got written. It overwrote a real saved position with
+    // ~0 and the listener's place was simply gone.
+    if (!state.playbackHeard) return;
     try {
         await api('PUT', `/api/progress/${novelId}`, {
             chapter_id: chapterId,
