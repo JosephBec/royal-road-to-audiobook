@@ -165,7 +165,14 @@ def cleanup_temp_files(keep_ids: set[int], expiring_ids: set[int] | None = None)
     Remove temp audio files. `keep_ids` are kept unconditionally;
     `expiring_ids` are kept while the file is younger than RETENTION_SECONDS;
     everything else is deleted.
+
+    Chapters mid-render are always protected, here rather than by each caller:
+    every caller means "apply the retention policy", and no version of that
+    policy wants to delete segments out from under a running render. The
+    favorites sync forgot this exact union and could shred a chapter whose
+    playback had started before its progress was saved.
     """
+    keep_ids = set(keep_ids) | active_chapter_ids()
     expiring_ids = expiring_ids or set()
     cutoff = time.time() - RETENTION_SECONDS
     swept: dict[int, int] = {}
@@ -416,11 +423,15 @@ def active_chapter_ids() -> set[int]:
     rendered and is not yet in the plan. Deleting its segments mid-render
     leaves a chapter that is half one take and half another, which is worse
     than either having it or not.
+
+    The chapter lock is the only signal used, because it is the only one with
+    the right lifetime: held for exactly the duration of a render, released
+    after. _streaming_state is deliberately not consulted — a head start ends
+    with its state still marked incomplete (that is what makes it resumable),
+    so treating "incomplete" as "active" made every head-started chapter
+    permanently unsweepable until the process restarted.
     """
-    active = {cid for cid, lock in _synth_locks.items() if lock.locked()}
-    active |= {cid for cid, state in _streaming_state.items()
-               if not state.get("complete")}
-    return active
+    return {cid for cid, lock in _synth_locks.items() if lock.locked()}
 
 
 def segment_durations(chapter_id: int) -> list[float] | None:

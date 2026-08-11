@@ -36,7 +36,7 @@ IDLE_TICK_SECONDS = 120
 
 _wake: asyncio.Event | None = None
 _worker_task: asyncio.Task | None = None
-_current: int | None = None     # chapter being rendered right now
+_sweeping = False               # a pass is underway, including between renders
 _deferred: set[int] = set()     # failed this pass; retried on the next one
 
 
@@ -49,9 +49,9 @@ def _ensure_wake() -> asyncio.Event:
 
 def reset():
     """Test hook: fresh state, no background task."""
-    global _wake, _current
+    global _wake, _sweeping
     _wake = asyncio.Event()
-    _current = None
+    _sweeping = False
     _deferred.clear()
 
 
@@ -61,9 +61,9 @@ def start_worker():
     Always a new event, never one that may belong to a closed loop (e.g. across
     TestClient app instances).
     """
-    global _wake, _worker_task, _current
+    global _wake, _worker_task, _sweeping
     _wake = asyncio.Event()
-    _current = None
+    _sweeping = False
     _deferred.clear()
     # Sweep straight away rather than waiting out the first idle tick. A
     # restart is the moment the cache is most likely to be behind — anything
@@ -93,8 +93,13 @@ def request_sweep():
 
 
 def is_busy() -> bool:
-    """True while a chapter is rendering or a sweep is pending (export gate)."""
-    return _current is not None or (_wake is not None and _wake.is_set())
+    """True while a sweep is running or pending (export gate).
+
+    The whole pass counts, not just the moments a render is in flight — the
+    planner's queries between renders are short, but an export that slipped
+    into one would hold the TTS worker for a full batch before yielding.
+    """
+    return _sweeping or (_wake is not None and _wake.is_set())
 
 
 async def _wait_for_interactive_idle():
@@ -167,8 +172,6 @@ async def _render_head_start(target: cache_policy.CacheTarget) -> bool:
     outcome against the same condition the planner uses is what makes that
     impossible.
     """
-    global _current
-    _current = target.chapter_id
     try:
         await _wait_for_interactive_idle()
         text = await _fetch_text(target.chapter_id, target.url)
@@ -184,8 +187,6 @@ async def _render_head_start(target: cache_policy.CacheTarget) -> bool:
         logger.exception("Head start failed for chapter %d (%s)",
                          target.chapter_id, target.title)
         return False
-    finally:
-        _current = None
 
 
 def _run_retention_cleanup():
@@ -194,9 +195,8 @@ def _run_retention_cleanup():
         keep, expiring = cache_policy.retention_sets(db)
     finally:
         db.close()
-    # A chapter mid-render is not in the plan until progress lands. See
-    # tts.active_chapter_ids.
-    tts.cleanup_temp_files(keep | tts.active_chapter_ids(), expiring)
+    # cleanup_temp_files itself protects chapters mid-render.
+    tts.cleanup_temp_files(keep, expiring)
 
 
 async def sweep_once() -> int:
@@ -204,18 +204,23 @@ async def sweep_once() -> int:
 
     Both the worker's unit of work and the test seam.
     """
+    global _sweeping
     rendered = 0
-    while True:
-        target = _next_target()
-        if target is None:
-            break
-        logger.info("Head start: chapter %d (%s) — %s",
-                    target.chapter_id, target.title, target.reason)
-        if await _render_head_start(target):
-            rendered += 1
-        else:
-            _deferred.add(target.chapter_id)
-    _run_retention_cleanup()
+    _sweeping = True
+    try:
+        while True:
+            target = _next_target()
+            if target is None:
+                break
+            logger.info("Head start: chapter %d (%s) — %s",
+                        target.chapter_id, target.title, target.reason)
+            if await _render_head_start(target):
+                rendered += 1
+            else:
+                _deferred.add(target.chapter_id)
+        _run_retention_cleanup()
+    finally:
+        _sweeping = False
     return rendered
 
 

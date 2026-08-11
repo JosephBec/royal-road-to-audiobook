@@ -26,7 +26,7 @@ from scrapers import get_scraper_for_url, supported_sites
 from tts import (
     synthesize_chapter_to_file, synthesize_chapter_streaming,
     get_chapter_status, get_streaming_state,
-    cleanup_temp_files, interactive_synthesis, is_rendering, active_chapter_ids,
+    cleanup_temp_files, interactive_synthesis, is_rendering,
     temp_path_for_chapter, _segment_path,
     _aac_segment_path, SEGMENT_GAP_SECONDS, segment_gap_for,
     segment_durations as recorded_segment_durations,
@@ -228,9 +228,9 @@ async def start_synthesis(chapter_id: int, db: Session = Depends(get_db)):
             keep, expiring = cache_policy.retention_sets(db2)
         finally:
             db2.close()
-        # The chapter just played may not be in saved progress yet, so protect
-        # whatever is actually rendering (see tts.active_chapter_ids).
-        cleanup_temp_files(keep | active_chapter_ids() | {chapter_id}, expiring)
+        # The chapter just played may not be in saved progress yet; mid-render
+        # chapters are protected by cleanup_temp_files itself.
+        cleanup_temp_files(keep | {chapter_id}, expiring)
 
     # If this chapter is already synthesized, still run the after-step:
     # the prefetch chain used to break here, leaving autoplay with a cold

@@ -182,15 +182,34 @@ def test_retention_runs_after_the_sweep(pf_env):
 def test_retention_protects_a_chapter_that_is_still_rendering(pf_env, monkeypatch):
     """Progress lands after playback starts, so a chapter can be mid-render and
     not yet anywhere in the plan. Sweeping its segments away mid-render leaves
-    a chapter that is half one take and half another."""
+    a chapter that is half one take and half another.
+
+    Exercises the real cleanup_temp_files: the protection lives inside it, so a
+    capture of the arguments would prove nothing.
+    """
     prefetch, tts, db, database, rendered, cleanups = pf_env
     _reading(db, database, "inflight", at=5)
     monkeypatch.setattr(tts, "active_chapter_ids", lambda: {999_111})
+    monkeypatch.setattr(prefetch.tts, "cleanup_temp_files", tts.cleanup_temp_files)
+    victim = tts.temp_path_for_chapter(999_111)
+    victim.write_bytes(b"mid-render segment data")
 
     asyncio.run(prefetch.sweep_once())
 
-    keep, _ = cleanups[0]
-    assert 999_111 in keep
+    assert victim.exists(), "retention deleted a chapter that was still rendering"
+
+
+def test_a_finished_head_start_is_not_active(pf_env):
+    """A head start ends with its streaming state still marked incomplete —
+    that is what makes it resumable. Treating incomplete as active made every
+    head-started chapter permanently unsweepable until a restart, so archived
+    novels never actually released their audio."""
+    prefetch, tts, db, database, rendered, _ = pf_env
+    tts._streaming_state[777] = {"complete": False, "segments": [],
+                                 "total_duration": 120.0}
+
+    assert 777 not in tts.active_chapter_ids()
+    tts._streaming_state.pop(777, None)
 
 
 def test_the_worker_sweeps_on_an_idle_tick(pf_env, monkeypatch):

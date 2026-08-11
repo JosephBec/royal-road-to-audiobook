@@ -1233,20 +1233,31 @@ function setupAudioEvents() {
         state.isPlaying = true;
         document.getElementById('btn-play-pause').textContent = '⏸';
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+        // Build the keepalive's AudioContext here, inside a guaranteed user
+        // gesture, so resuming it later from a lock-screen handler — where
+        // gesture rules are murkier — only has to resume, never create.
+        prepareSilentKeepalive();
         stopSilentKeepalive();
         updatePositionState();
     });
 
     audio.addEventListener('pause', () => {
+        // A finished element fires pause before ended (spec), so during
+        // Instant Play every segment boundary lands here. Those are not
+        // pauses: the loop plays the next segment immediately. Doing the
+        // paused-state bookkeeping for them stamped paused/playing onto the
+        // lock screen and saved progress once per sentence.
+        if (state._instantActive && state.audio.ended) return;
         state.isPlaying = false;
         if (!state.isSynthesizing) {
             document.getElementById('btn-play-pause').textContent = '▶';
         }
-        // Order matters: starting a media element flips iOS's displayed
-        // state to "playing", so assert paused *after* the keepalive, and
-        // again a tick later once iOS has settled.
+        // The keepalive is Web Audio, not a second media element, so starting
+        // it does not change what iOS considers the Now Playing item — this
+        // element stays it, and "paused" is simply true.
         startSilentKeepalive();
-        assertPausedState();
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+        updatePositionState();   // pin the frozen timeline at the paused spot
         saveProgress();
     });
 
@@ -1323,22 +1334,6 @@ function setupAudioEvents() {
 const SKIP_BACK_SECONDS = 15;
 const SKIP_FORWARD_SECONDS = 30;
 
-// What a transport "pause" command actually means.
-//
-// iOS aims the command at whatever element is playing. Once the listener
-// pauses, that is the silent keepalive rather than the chapter — so pressing
-// play on a headset arrives here as "pause". Treating it as a no-op is what
-// made every resume take two presses: the first was absorbed and only the
-// second came through as "play".
-//
-// Immediately after the keepalive starts, iOS emits a pause of its own while
-// the session settles. That one has to be ignored, or starting the keepalive
-// would immediately start playback nobody asked for.
-function pauseCommandIntent(audioPaused, msSinceKeepaliveStart) {
-    if (!audioPaused) return 'pause';
-    return msSinceKeepaliveStart < KEEPALIVE_SETTLE_MS ? 'ignore' : 'play';
-}
-
 function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
@@ -1354,23 +1349,27 @@ function updateMediaSession() {
             : [],
     });
 
-    // Explicit handlers — a toggle here desyncs when iOS's idea of the state
-    // differs from ours, which broke resume from the lock screen.
+    // Transport commands, interpreted against our own paused state and nothing
+    // else. This used to be a timing heuristic: a second <audio> element (the
+    // old keepalive) was the playing element during a pause, so iOS routed the
+    // headset toggle to it as "pause", and a timer tried to guess whether each
+    // pause command was the user or iOS settling. The timer failed both ways —
+    // presses inside the window were swallowed, and any pause iOS emitted
+    // after it (Siri, a call, another app taking audio focus) started playback
+    // nobody asked for, hours later. With the keepalive out of the media
+    // element world entirely there is nothing to route wrongly: paused means
+    // paused, and a pause command while paused can only be a toggle press
+    // meaning resume.
     navigator.mediaSession.setActionHandler('play', () => {
         stopSilentKeepalive();
         state.audio.play().catch(() => {});
     });
     navigator.mediaSession.setActionHandler('pause', () => {
-        const intent = pauseCommandIntent(state.audio.paused,
-                                          Date.now() - keepaliveStartedAt);
-        if (intent === 'pause') {
-            state.audio.pause();
-        } else if (intent === 'play') {
+        if (state.audio.paused) {
             stopSilentKeepalive();
             state.audio.play().catch(() => {});
         } else {
-            startSilentKeepalive(false);   // re-arm without extending the window
-            assertPausedState();
+            state.audio.pause();
         }
     });
     // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
@@ -1406,98 +1405,69 @@ function updateMediaSession() {
 // has, the Now Playing controls stop routing to this page: play does nothing,
 // which is why resume only works if you press it almost immediately.
 //
-// Two mitigations. Re-registering on wake is free and always on. The silent
-// keepalive genuinely holds the session open but costs a trickle of battery,
-// so it is opt-in and stored per device — it only matters on iOS.
+// The keepalive holds the session open with Web Audio — a looping buffer of
+// silence — and specifically NOT with a second <audio> element. The previous
+// design used one, and it was the root of every resume bug this app has had:
+// iOS routes transport commands to whichever media element is playing, so
+// during a pause every button press was aimed at the silent loop instead of
+// the chapter, and the page was reduced to guessing what each command meant
+// from its timing. Web Audio keeps the session alive without ever appearing
+// in the media element world, so the paused chapter remains the Now Playing
+// item, its frozen timeline stays honest, and a button press means exactly
+// what it says.
+//
+// Still opt-in and stored per device: a silent render loop costs a trickle of
+// battery, and only iOS needs it.
 
 const KEEPALIVE_KEY = 'iosKeepSessionAlive';
 // Stop holding the session open after this long. The bug only bites for a
-// listener coming back to a paused book; keeping a silent track running all
-// night to serve that is a battery cost with no benefit.
+// listener coming back to a paused book; keeping the session alive all night
+// to serve that is a battery cost with no benefit.
 const KEEPALIVE_MAX_MS = 45 * 60 * 1000;
-let silentLoop = null;
+let keepaliveCtx = null;       // AudioContext with a looping silent source
 let keepaliveExpiry = null;
-let keepaliveActive = false;
-// When the keepalive last started. iOS emits a pause of its own while the
-// session settles, and that has to be told apart from a real button press.
-let keepaliveStartedAt = 0;
-const KEEPALIVE_SETTLE_MS = 1000;
 
 function keepaliveEnabled() {
     return localStorage.getItem(KEEPALIVE_KEY) === '1';
 }
 
-function silentWavUrl() {
-    // A tiny silent WAV, built rather than shipped as a base64 blob so it is
-    // obvious what it is. 0.25s of 8kHz 8-bit silence.
-    const samples = 2000, headerLength = 44;
-    const buffer = new ArrayBuffer(headerLength + samples);
-    const view = new DataView(buffer);
-    const ascii = (offset, text) => {
-        for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
-    };
-    ascii(0, 'RIFF'); view.setUint32(4, 36 + samples, true); ascii(8, 'WAVE');
-    ascii(12, 'fmt '); view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
-    view.setUint16(32, 1, true); view.setUint16(34, 8, true);
-    ascii(36, 'data'); view.setUint32(40, samples, true);
-    for (let i = 0; i < samples; i++) view.setUint8(headerLength + i, 128); // 8-bit silence
-    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+function prepareSilentKeepalive() {
+    // Build the context inside a known user gesture (the play that starts the
+    // chapter) and leave it suspended. iOS only lets audio start under a
+    // gesture, and whether a lock-screen action handler counts as one is
+    // exactly the kind of ambiguity this rewrite exists to remove — a resume()
+    // on an existing context is the least it could ever need to do.
+    if (!keepaliveEnabled() || keepaliveCtx) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    try {
+        keepaliveCtx = new Ctx();
+        const source = keepaliveCtx.createBufferSource();
+        // One second of silence, looped. Zeroed samples — nothing to hear at
+        // any volume.
+        source.buffer = keepaliveCtx.createBuffer(1, keepaliveCtx.sampleRate,
+                                                  keepaliveCtx.sampleRate);
+        source.loop = true;
+        source.connect(keepaliveCtx.destination);
+        source.start();
+        keepaliveCtx.suspend().catch(() => {});
+    } catch (e) {
+        keepaliveCtx = null;
+    }
 }
 
-// restamp=false re-arms the loop without resetting the settle window. Without
-// that distinction, iOS emitting a pause every settle period would keep
-// pushing the window forward and no button press would ever get through.
-function startSilentKeepalive(restamp = true) {
+function startSilentKeepalive() {
     if (!keepaliveEnabled()) return;
-    if (!silentLoop) {
-        silentLoop = new Audio(silentWavUrl());
-        silentLoop.loop = true;
-        silentLoop.volume = 0;
-    }
-    silentLoop.play().catch(() => {});   // blocked before any user gesture; harmless
-    keepaliveActive = true;
-    if (restamp) keepaliveStartedAt = Date.now();
-    // Drop the timeline while the silent loop holds the session.
-    //
-    // iOS takes its Now Playing item from whichever element is actually
-    // playing, and once paused that is the keepalive — but the position state
-    // still described the chapter. The lock screen therefore showed the
-    // chapter's full length and ran a progress bar across all of it while
-    // nothing audible was playing. Clearing it leaves the title and controls
-    // and removes the scrubber, which is the honest display for "paused".
-    clearPositionState();
+    prepareSilentKeepalive();
+    if (!keepaliveCtx) return;
+    keepaliveCtx.resume().catch(() => {});
     if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
     keepaliveExpiry = setTimeout(stopSilentKeepalive, KEEPALIVE_MAX_MS);
 }
 
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
-    if (silentLoop) silentLoop.pause();
-    keepaliveActive = false;
-}
-
-function clearPositionState() {
-    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-    try {
-        navigator.mediaSession.setPositionState();   // no argument clears it
-    } catch (e) {}
-}
-
-function assertPausedState() {
-    // iOS decides the displayed state from whether a media element is playing,
-    // so the silent loop makes it read "playing" while we are actually paused.
-    // Re-asserting after it starts — and again once iOS settles — keeps the
-    // lock screen honest. Without this the first tap only corrects the display
-    // and a second is needed to actually resume.
-    if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = 'paused';
-    setTimeout(() => {
-        if (state.audio.paused && 'mediaSession' in navigator) {
-            navigator.mediaSession.playbackState = 'paused';
-        }
-    }, 250);
+    if (keepaliveCtx) keepaliveCtx.suspend().catch(() => {});
 }
 
 function reviveMediaSession() {
@@ -1508,14 +1478,23 @@ function reviveMediaSession() {
         navigator.mediaSession.playbackState = state.isPlaying ? 'playing' : 'paused';
     }
     updatePositionState();
+    // An interruption (a call, Siri) can suspend the context while the page is
+    // backgrounded; coming back to the page is the earliest chance to restart
+    // it. Idempotent when it is already running.
+    if (!state.isPlaying) startSilentKeepalive();
 }
 
 function updatePositionState() {
     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-    // Republishing the chapter's timeline while the keepalive is the playing
-    // element is what put a running progress bar on the lock screen during a
-    // pause. Nothing to say until real playback resumes.
-    if (keepaliveActive) return;
+    // During Instant Play the element's duration is one sentence's, and
+    // publishing it drew a fresh sliver of a progress bar on the lock screen
+    // every few seconds. Say nothing until the full-file swap gives the
+    // element the chapter's real timeline.
+    if (state._instantActive) return;
+    // Published while playing and while paused alike. The chapter element is
+    // the Now Playing item in both states now, so its real position is the
+    // honest thing to show — a frozen timeline at the paused spot, not a
+    // cleared one.
     const { duration, currentTime, playbackRate } = state.audio;
     if (!isFinite(duration) || !duration) return;
     try {
@@ -2640,6 +2619,11 @@ function setupEventListeners() {
         if (document.visibilityState === 'visible') reviveMediaSession();
     });
     window.addEventListener('pageshow', reviveMediaSession);
+
+    // iOS only lets an AudioContext start under a user gesture, and playback
+    // can begin without one (autoplay chaining into the next chapter). Any
+    // tap will do, so take the first one on offer. Cheap no-op once built.
+    document.addEventListener('click', prepareSilentKeepalive, true);
 
     document.getElementById('setting-keepalive').addEventListener('change', (e) => {
         localStorage.setItem(KEEPALIVE_KEY, e.target.checked ? '1' : '0');
