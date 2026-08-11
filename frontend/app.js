@@ -1796,7 +1796,10 @@ function primeKeepalive() {
         // expecting to stop the silence and instead resumes the chapter
         // (client log 17:30, 2026-08-11). Re-declare the truth the moment the
         // loop starts.
-        keepaliveEl.addEventListener('play', () => assertPausedState('kl:play'));
+        keepaliveEl.addEventListener('play', () => {
+            assertPausedState('kl:play');
+            publishKeepalivePosition();
+        });
     }
     const p = keepaliveEl.play();
     if (!p) { keepalivePrimed = true; return; }
@@ -1817,6 +1820,35 @@ function assertPausedState(why) {
     if (!state.audio.paused || !('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = 'paused';
     dlog('kl:assert-paused', { why });
+}
+
+function publishKeepalivePosition() {
+    // iOS ties the Now Playing ticker to whichever element is actually
+    // playing — the silence loop, once a pause starts — and extrapolates it
+    // forward in real time from whatever position/duration was last
+    // published, ignoring our playbackState override. Until this fix that
+    // was still the CHAPTER's own duration and paused position (set by
+    // updatePositionState() in the pause handler), so the lock screen showed
+    // the chapter appearing to keep playing through the pause: a ticker
+    // counting up, "time remaining" draining toward zero at the chapter's
+    // real length (user report, 2026-08-11). If a pause ran long enough that
+    // countdown could reach zero, which risks iOS treating the chapter as
+    // finished and tearing down the session we depend on.
+    //
+    // Publish the loop's own honest timeline instead: 0 of its real
+    // KEEPALIVE_MAX_MS lifetime, reset every time a new pause begins (this
+    // runs once per loop 'play' event, which fires exactly then). The ticker
+    // now reflects how long the pause has actually run, and never implies
+    // the chapter itself is progressing or ending.
+    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+    try {
+        navigator.mediaSession.setPositionState({
+            duration: KEEPALIVE_MAX_MS / 1000,
+            playbackRate: 1,
+            position: 0,
+        });
+        dlog('kl:pos-reset');
+    } catch (e) {}
 }
 
 function startSilentKeepalive() {
