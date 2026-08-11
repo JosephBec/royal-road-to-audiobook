@@ -218,6 +218,52 @@ function renderThemePanel() {
         </div>`;
 }
 
+// ===== Diagnostic event log =====
+// The iPhone can't be debugged directly, so the page records what it saw —
+// every media-session command, audio element event, and keepalive state
+// change — and beacons it to the server (client_events.log). sendBeacon
+// survives backgrounding, which is where all the interesting events happen.
+const DIAG = {
+    buf: [],
+    sid: Math.random().toString(36).slice(2, 8),
+    timer: null,
+    standalone: window.matchMedia('(display-mode: standalone)').matches
+        || navigator.standalone === true,
+};
+
+function dlog(event, extra = {}) {
+    const a = state.audio;
+    const src = a?.currentSrc || '';
+    DIAG.buf.push({
+        t: Date.now(),
+        e: event,
+        ct: a ? Math.round(a.currentTime * 10) / 10 : null,
+        paused: a ? a.paused : null,
+        rs: a ? a.readyState : null,
+        src: src.includes('.m3u8') ? 'hls' : (src.includes('/stream') ? 'file' : (src ? 'other' : 'none')),
+        vis: document.visibilityState,
+        ka: typeof keepaliveCtx !== 'undefined' && keepaliveCtx ? keepaliveCtx.state : 'none',
+        sa: DIAG.standalone ? 1 : 0,
+        ...extra,
+    });
+    if (DIAG.buf.length > 400) DIAG.buf.splice(0, DIAG.buf.length - 400);
+    if (!DIAG.timer) DIAG.timer = setTimeout(flushDiag, 2000);
+}
+
+function flushDiag() {
+    if (DIAG.timer) { clearTimeout(DIAG.timer); DIAG.timer = null; }
+    if (!DIAG.buf.length) return;
+    const events = DIAG.buf.splice(0);
+    try {
+        navigator.sendBeacon('/api/client-log',
+            new Blob([JSON.stringify({ sid: DIAG.sid, events })], { type: 'application/json' }));
+    } catch (e) { /* diagnostics must never break playback */ }
+}
+
+document.addEventListener('visibilitychange', () => { dlog('vis'); flushDiag(); });
+window.addEventListener('pagehide', () => { dlog('pagehide'); flushDiag(); });
+window.addEventListener('pageshow', (e) => dlog('pageshow', { persisted: e.persisted ? 1 : 0 }));
+
 // ===== API Helpers =====
 async function api(method, path, body = null) {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -953,6 +999,8 @@ async function playChapter(chapter, novel = state.currentNovel) {
 
     if (state.playback.chapter?.id !== chapterId) return;
 
+    dlog('playChapter', { id: chapterId, mode, ready: synthResult?.ready ? 1 : 0 });
+
     if (synthResult && synthResult.ready) {
         // Already synthesized — play full file directly
         state.isSynthesizing = false;
@@ -1466,7 +1514,12 @@ function setupAudioEvents() {
 
     // Single source of truth for play/pause UI and the OS media session —
     // required for iOS to keep the Now Playing session claimable while paused.
+    // Low-level element events, logged raw for the diagnostic stream.
+    ['waiting', 'stalled', 'suspend', 'emptied', 'abort', 'seeking'].forEach(ev =>
+        audio.addEventListener(ev, () => dlog('audio:' + ev)));
+
     audio.addEventListener('play', () => {
+        dlog('audio:play');
         state.isPlaying = true;
         document.getElementById('btn-play-pause').textContent = '⏸';
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
@@ -1483,6 +1536,7 @@ function setupAudioEvents() {
         // paused-state bookkeeping for them stamped paused/playing onto the
         // lock screen and saved progress once per sentence.
         if (state._instantActive && state.audio.ended) return;
+        dlog('audio:pause', { instant: state._instantActive ? 1 : 0 });
         state.isPlaying = false;
         if (!state.isSynthesizing) {
             document.getElementById('btn-play-pause').textContent = '▶';
@@ -1531,6 +1585,7 @@ function setupAudioEvents() {
     // which also flips isPlaying on a stream that then stalls silently.
     // 'loadstart' fires on every source change, closing the window.
     audio.addEventListener('playing', () => {
+        dlog('audio:playing');
         state.playbackHeard = true;
         // First trustworthy moment to mark this chapter as the current one —
         // the kickoff save this replaces ran before audio existed and could
@@ -1549,6 +1604,7 @@ function setupAudioEvents() {
         // During Instant Play, segments end individually — don't trigger auto-play
         if (state._instantActive) return;
 
+        dlog('audio:ended');
         state.isPlaying = false;
         document.getElementById('btn-play-pause').textContent = '▶';
         saveProgress();
@@ -1563,6 +1619,7 @@ function setupAudioEvents() {
         // Instant Play swaps audio.src between segments and polls for not-yet-
         // ready ones; those transient errors are handled by the segment loop,
         // so don't surface a toast for them.
+        dlog('audio:error', { code: audio.error?.code ?? null, instant: state._instantActive ? 1 : 0 });
         if (state._instantActive) return;
         loadingEl.style.display = 'none';
         showToast('Audio playback error');
@@ -1613,19 +1670,24 @@ function updateMediaSession() {
     // suspended loop would let the session die with nothing left to claim.
     // The audio element's own play event does the bookkeeping on success.
     navigator.mediaSession.setActionHandler('play', () => {
-        state.audio.play().catch(() => {});
+        dlog('ms:play');
+        state.audio.play().then(() => dlog('ms:play-ok'))
+                          .catch((e) => dlog('ms:play-failed', { err: String(e) }));
     });
     navigator.mediaSession.setActionHandler('pause', () => {
         if (state.audio.paused) {
-            state.audio.play().catch(() => {});
+            dlog('ms:pause-as-resume');
+            state.audio.play().then(() => dlog('ms:resume-ok'))
+                              .catch((e) => dlog('ms:resume-failed', { err: String(e) }));
         } else {
+            dlog('ms:pause');
             state.audio.pause();
         }
     });
     // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
     // (often "10") but the page controls the actual jump.
-    navigator.mediaSession.setActionHandler('seekbackward', () => seekRelative(-SKIP_BACK_SECONDS));
-    navigator.mediaSession.setActionHandler('seekforward', () => seekRelative(SKIP_FORWARD_SECONDS));
+    navigator.mediaSession.setActionHandler('seekbackward', () => { dlog('ms:seekback'); seekRelative(-SKIP_BACK_SECONDS); });
+    navigator.mediaSession.setActionHandler('seekforward', () => { dlog('ms:seekfwd'); seekRelative(SKIP_FORWARD_SECONDS); });
     // Track buttons skip within the chapter, they do not change chapter.
     //
     // A double-press on a headset is "next track", and mapping that to the
@@ -1708,8 +1770,11 @@ function prepareSilentKeepalive() {
         source.loop = true;
         source.connect(keepaliveCtx.destination);
         source.start();
+        keepaliveCtx.onstatechange = () => dlog('ka:state');
+        dlog('ka:created');
     } catch (e) {
         keepaliveCtx = null;
+        dlog('ka:create-failed', { err: String(e) });
     }
 }
 
@@ -1719,7 +1784,10 @@ function ensureKeepaliveRunning() {
     if (!keepaliveEnabled()) return;
     prepareSilentKeepalive();
     if (!keepaliveCtx) return;
-    keepaliveCtx.resume().catch(() => {});
+    if (keepaliveCtx.state !== 'running') {
+        keepaliveCtx.resume().then(() => dlog('ka:resume-ok'))
+                             .catch((e) => dlog('ka:resume-failed', { err: String(e) }));
+    }
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
 }
 
@@ -1727,17 +1795,19 @@ function startSilentKeepalive() {
     // Pause path: keep holding the session, but not forever.
     ensureKeepaliveRunning();
     if (!keepaliveCtx) return;
-    keepaliveExpiry = setTimeout(stopSilentKeepalive, KEEPALIVE_MAX_MS);
+    keepaliveExpiry = setTimeout(() => { dlog('ka:expiry'); stopSilentKeepalive(); },
+                                 KEEPALIVE_MAX_MS);
 }
 
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
-    if (keepaliveCtx) keepaliveCtx.suspend().catch(() => {});
+    if (keepaliveCtx) { dlog('ka:suspend'); keepaliveCtx.suspend().catch(() => {}); }
 }
 
 function reviveMediaSession() {
     // Handlers and metadata can be dropped when the page is frozen and thawed.
     if (!state.playback.chapter) return;
+    dlog('revive', { playing: state.isPlaying ? 1 : 0 });
     updateMediaSession();
     if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = state.isPlaying ? 'playing' : 'paused';
@@ -1762,14 +1832,15 @@ function updatePositionState() {
     // honest thing to show — a frozen timeline at the paused spot, not a
     // cleared one.
     const { duration, currentTime, playbackRate } = state.audio;
-    if (!isFinite(duration) || !duration) return;
+    if (!isFinite(duration) || !duration) { dlog('pos:skip'); return; }
     try {
         navigator.mediaSession.setPositionState({
             duration: duration,
             playbackRate: playbackRate,
             position: Math.min(currentTime, duration),
         });
-    } catch (e) {}
+        dlog('pos:set', { dur: Math.round(duration) });
+    } catch (e) { dlog('pos:failed', { err: String(e) }); }
 }
 
 // ===== Progress Saving =====

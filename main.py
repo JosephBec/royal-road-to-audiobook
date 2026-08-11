@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import subprocess
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -176,6 +177,31 @@ async def version():
         "git_sha": APP_VERSION,
         "started_at": STARTED_AT.isoformat() if STARTED_AT else None,
     }
+
+
+# Diagnostic event stream from the frontend (iOS lock-screen debugging: the
+# phone can't be inspected directly, so the page reports what it saw). JSONL,
+# one event per line, client timestamps preserved.
+CLIENT_LOG = Path(__file__).parent / "client_events.log"
+
+
+@app.post("/api/client-log")
+async def client_log(request: Request):
+    try:
+        payload = json.loads(await request.body())
+    except Exception:
+        return {"ok": False}
+    events = payload.get("events", [])
+    if not isinstance(events, list):
+        return {"ok": False}
+    sid = str(payload.get("sid", ""))[:16]
+    received = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with CLIENT_LOG.open("a", encoding="utf-8") as f:
+        for ev in events[:500]:
+            if isinstance(ev, dict):
+                f.write(json.dumps({"srv": received, "sid": sid, **ev},
+                                   ensure_ascii=False, default=str) + "\n")
+    return {"ok": True}
 
 
 @app.post("/api/library/refresh-favorites")
