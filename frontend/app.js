@@ -1027,10 +1027,20 @@ async function playChapter(chapter, novel = state.currentNovel) {
     dlog('playChapter', { id: chapterId, mode, ready: synthResult?.ready ? 1 : 0 });
 
     if (synthResult && synthResult.ready) {
-        // Already synthesized — play full file directly
         state.isSynthesizing = false;
         loadingEl.style.display = 'none';
-        await playFullFile(chapterId);
+        if (supportsNativeHls) {
+            // iOS plays ready chapters over HLS too, not the progressive WAV:
+            // Safari refuses background network fetches for a paused WAV, so
+            // resuming from the lock screen after a few minutes produced
+            // frozen "zombie" playback (client log 18:07, 2026-08-11). HLS is
+            // the one transport iOS lets refetch while backgrounded — it's
+            // why streamed chapters always resumed fine. playInstantHls
+            // falls back to the WAV when segments can't cover the chapter.
+            await playInstantHls(chapterId);
+        } else {
+            await playFullFile(chapterId);
+        }
         return;
     }
 
@@ -1152,7 +1162,10 @@ async function playInstantHls(chapterId) {
             state.isSynthesizing = false;
             return;
         }
-        if (segData.segment_count === 0 && segData.file_ready) {
+        if (segData.file_ready && !segData.hls_complete) {
+            // Rendered, but the segments can't serve the whole chapter (none,
+            // partial head-start coverage, or an old server without the
+            // flag): the full WAV is the only complete source.
             state.isSynthesizing = false;
             loadingEl.style.display = 'none';
             await playFullFile(chapterId);
