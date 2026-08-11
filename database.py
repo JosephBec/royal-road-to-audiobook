@@ -190,7 +190,8 @@ class Settings(Base):
     speed = Column(Float, default=1.0)
     playback_mode = Column(String, default="full")  # "full" or "instant"
     auto_play = Column(Boolean, default=True)
-    theme = Column(String, default="dark")  # "dark" or "light"
+    theme = Column(String, default="dark")  # "dark", "light", "oled", "warm"
+    accent = Column(String, nullable=True)  # "#rrggbb"; NULL = theme's default
     chapter_sort = Column(String, default="asc")  # "asc" or "desc"
     audiobook_dir = Column(Text, nullable=False, default=r"E:\Plex\Audiobooks\Audiobooks")
     plex_url = Column(Text, nullable=False, default="")
@@ -248,6 +249,7 @@ def _migrate_schema():
             "plex_url": "TEXT NOT NULL DEFAULT ''",
             "plex_token": "TEXT NOT NULL DEFAULT ''",
             "plex_section_id": "TEXT NOT NULL DEFAULT ''",
+            "accent": "TEXT",
         },
     }
     with engine.begin() as conn:

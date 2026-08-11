@@ -36,7 +36,7 @@ const state = {
     progressInterval: null,
     saveInterval: null,
     // Settings
-    settings: { engine: 'kokoro', voice: 'af_heart', speed: 1.0, playback_mode: 'full', auto_play: true, theme: 'dark', chapter_sort: 'asc' },
+    settings: { engine: 'kokoro', voice: 'af_heart', speed: 1.0, playback_mode: 'full', auto_play: true, theme: 'dark', accent: null, chapter_sort: 'asc' },
     voices: [],
     engines: [],
     // Instant Play state
@@ -78,7 +78,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyLibraryView();
 
     await bootStep('settings', loadSettings);
-    await bootStep('theme', () => applyTheme(state.settings.theme));
+    await bootStep('theme', () => {
+        applyTheme(state.settings.theme);
+        applyAccent(state.settings.accent);
+    });
     await bootStep('playback rate', () => applyPlaybackRate());
     await bootStep('voices', loadVoices);
     await bootStep('library', loadLibrary);
@@ -91,17 +94,94 @@ window.addEventListener('hashchange', () => {
 });
 
 // ===== Theme =====
+// Preview colors mirror the [data-theme] token blocks in style.css.
+const THEMES = [
+    { id: 'dark',  name: 'Dark',       family: 'dark',  preview: { bg: '#0f1117', card: '#222536', text: '#e8eaf0' } },
+    { id: 'oled',  name: 'OLED Black', family: 'dark',  preview: { bg: '#000000', card: '#12131c', text: '#e8eaf0' } },
+    { id: 'light', name: 'Light',      family: 'light', preview: { bg: '#f5f6fa', card: '#ffffff', text: '#1a1d27' } },
+    { id: 'warm',  name: 'Warm',       family: 'light', preview: { bg: '#f4ecdd', card: '#fdf8ee', text: '#3d3427' } },
+];
+// First = the themes' default purple; picking it clears the stored accent.
+const ACCENT_PRESETS = ['#6c5ce7', '#3b82f6', '#14b8a6', '#22c55e',
+                        '#f59e0b', '#f97316', '#f43f5e', '#ec4899'];
+
+function themeFamily(theme) {
+    return THEMES.find(t => t.id === theme)?.family || 'dark';
+}
+
 function applyTheme(theme) {
+    if (!THEMES.some(t => t.id === theme)) theme = 'dark';
     document.documentElement.setAttribute('data-theme', theme);
+    // The 🌙/☀️ toggle jumps families; remember the last theme of each so it
+    // round-trips to what you actually chose (device-local by design).
+    localStorage.setItem(themeFamily(theme) === 'dark' ? 'lastDarkTheme' : 'lastLightTheme', theme);
     const btn = document.getElementById('btn-theme-toggle');
-    btn.textContent = theme === 'dark' ? '\u{1F319}' : '\u{2600}\u{FE0F}';
+    btn.textContent = themeFamily(theme) === 'dark' ? '\u{1F319}' : '\u{2600}\u{FE0F}';
+    syncThemeColorMeta();
+}
+
+function applyAccent(accent) {
+    // Inline --accent on <html> beats the stylesheet; hover/dim derive from it
+    // in CSS via color-mix, so this one property recolors everything.
+    if (accent) {
+        document.documentElement.style.setProperty('--accent', accent);
+    } else {
+        document.documentElement.style.removeProperty('--accent');
+    }
+}
+
+function syncThemeColorMeta() {
+    // Keeps the iOS Safari chrome (status bar, toolbar) on the theme's
+    // background instead of default white.
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim();
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta && bg) meta.setAttribute('content', bg);
 }
 
 function toggleTheme() {
-    const newTheme = state.settings.theme === 'dark' ? 'light' : 'dark';
-    state.settings.theme = newTheme;
-    applyTheme(newTheme);
-    updateSetting('theme', newTheme);
+    const newTheme = themeFamily(state.settings.theme) === 'dark'
+        ? (localStorage.getItem('lastLightTheme') || 'light')
+        : (localStorage.getItem('lastDarkTheme') || 'dark');
+    setTheme(newTheme);
+}
+
+function setTheme(theme) {
+    state.settings.theme = theme;
+    applyTheme(theme);
+    updateSetting('theme', theme);
+    renderThemePanel();
+}
+
+function setAccent(accent) {
+    state.settings.accent = accent || null;
+    applyAccent(state.settings.accent);
+    // '' (not null) tells the server "clear it" — null means "not provided".
+    updateSetting('accent', accent || '');
+    renderThemePanel();
+}
+
+function renderThemePanel() {
+    const swatches = document.getElementById('theme-swatches');
+    if (!swatches || !document.getElementById('settings-panel-theme')) return;
+    swatches.innerHTML = THEMES.map(t => `
+        <button class="theme-swatch${t.id === state.settings.theme ? ' active' : ''}" data-theme-id="${t.id}">
+            <div class="theme-swatch-preview" style="background:${t.preview.bg};">
+                <div class="theme-swatch-card" style="background:${t.preview.card};color:${t.preview.text};">Aa</div>
+                <div class="theme-swatch-dot"></div>
+            </div>
+            <div class="theme-swatch-name">${t.name}</div>
+        </button>`).join('');
+
+    const accent = state.settings.accent;
+    const isPreset = !accent || ACCENT_PRESETS.includes(accent);
+    document.getElementById('accent-row').innerHTML = ACCENT_PRESETS.map((hex, i) => {
+        const active = i === 0 ? (!accent || accent === hex) : accent === hex;
+        return `<button class="accent-dot${active ? ' active' : ''}" data-accent="${i === 0 ? '' : hex}"
+                        style="background:${hex};" title="${i === 0 ? 'Default' : hex}"></button>`;
+    }).join('') + `
+        <div class="accent-custom${accent && !isPreset ? ' active' : ''}" title="Custom color">
+            <input type="color" id="accent-custom-input" value="${accent || ACCENT_PRESETS[0]}">
+        </div>`;
 }
 
 // ===== API Helpers =====
@@ -1768,8 +1848,8 @@ function openSettings() {
     document.getElementById('setting-autoplay').checked = state.settings.auto_play;
     document.getElementById('setting-keepalive').checked = keepaliveEnabled();
 
-    // Theme
-    document.getElementById('setting-theme').value = state.settings.theme;
+    // Theme tab
+    renderThemePanel();
 
     // Chapter sort
     document.getElementById('setting-chapter-sort').value = state.settings.chapter_sort;
@@ -1790,7 +1870,7 @@ function openSettings() {
 function switchSettingsTab(name) {
     document.querySelectorAll('.settings-tab').forEach(btn =>
         btn.classList.toggle('active', btn.dataset.tab === name));
-    ['playback', 'export', 'voices'].forEach(tab => {
+    ['playback', 'export', 'voices', 'theme'].forEach(tab => {
         document.getElementById(`settings-panel-${tab}`).style.display = tab === name ? '' : 'none';
     });
 }
@@ -2806,10 +2886,21 @@ function setupEventListeners() {
         updateSetting('auto_play', e.target.checked);
     });
 
-    document.getElementById('setting-theme').addEventListener('change', (e) => {
-        state.settings.theme = e.target.value;
-        applyTheme(e.target.value);
-        updateSetting('theme', e.target.value);
+    // Theme tab (contents re-render on every change, so delegate)
+    document.getElementById('theme-swatches').addEventListener('click', (e) => {
+        const btn = e.target.closest('.theme-swatch');
+        if (btn) setTheme(btn.dataset.themeId);
+    });
+    document.getElementById('accent-row').addEventListener('click', (e) => {
+        const dot = e.target.closest('.accent-dot');
+        if (dot) setAccent(dot.dataset.accent);
+    });
+    // Live-preview while dragging inside the native picker; persist on commit.
+    document.getElementById('accent-row').addEventListener('input', (e) => {
+        if (e.target.id === 'accent-custom-input') applyAccent(e.target.value);
+    });
+    document.getElementById('accent-row').addEventListener('change', (e) => {
+        if (e.target.id === 'accent-custom-input') setAccent(e.target.value);
     });
 
     document.getElementById('setting-chapter-sort').addEventListener('change', (e) => {

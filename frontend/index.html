@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- Kept in sync with the active theme's --bg-primary by applyTheme(). -->
+    <meta name="theme-color" content="#0f1117">
     <title>Novel TTS</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -156,6 +158,7 @@
                 <button class="lib-tab settings-tab active" data-tab="playback">Playback</button>
                 <button class="lib-tab settings-tab" data-tab="export">Export</button>
                 <button class="lib-tab settings-tab" data-tab="voices">Voices</button>
+                <button class="lib-tab settings-tab" data-tab="theme">Theme</button>
             </div>
             <div id="settings-panel-playback" class="settings-panel">
             <div class="setting-row">
@@ -191,13 +194,6 @@
                 <input type="checkbox" id="setting-keepalive">
             </div>
             <div class="setting-row">
-                <label for="setting-theme">Default Theme</label>
-                <select id="setting-theme">
-                    <option value="dark">Dark</option>
-                    <option value="light">Light</option>
-                </select>
-            </div>
-            <div class="setting-row">
                 <label for="setting-chapter-sort">Chapter Sort Order</label>
                 <select id="setting-chapter-sort">
                     <option value="asc">Ascending (1, 2, 3...)</option>
@@ -231,6 +227,17 @@
             <div id="settings-panel-voices" class="settings-panel" style="display:none;">
                 <div id="voice-demo-list"></div>
                 <p class="hint">Demos are generated on first play, then cached. The very first one may take a few seconds.</p>
+            </div>
+            <div id="settings-panel-theme" class="settings-panel" style="display:none;">
+                <div class="setting-stack">
+                    <label>Theme</label>
+                    <div id="theme-swatches" class="theme-swatches"></div>
+                </div>
+                <div class="setting-stack">
+                    <label>Accent Color</label>
+                    <div id="accent-row" class="accent-row"></div>
+                    <p class="hint">Buttons, highlights, and progress bars follow the accent.</p>
+                </div>
             </div>
             <div class="modal-actions">
                 <button id="btn-settings-close" class="primary-btn">Done</button>

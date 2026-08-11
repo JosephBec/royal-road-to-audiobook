@@ -5,6 +5,7 @@ Handles reading and updating app-wide settings (voice, speed, playback mode).
 """
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -24,6 +25,7 @@ class SettingsResponse(BaseModel):
     playback_mode: str
     auto_play: bool
     theme: str
+    accent: str | None
     chapter_sort: str
     audiobook_dir: str
     plex_url: str
@@ -40,6 +42,7 @@ class UpdateSettingsRequest(BaseModel):
     playback_mode: str | None = None
     auto_play: bool | None = None
     theme: str | None = None
+    accent: str | None = None
     chapter_sort: str | None = None
     audiobook_dir: str | None = None
     plex_url: str | None = None
@@ -91,9 +94,18 @@ async def update_settings(req: UpdateSettingsRequest, db: Session = Depends(get_
     if req.auto_play is not None:
         settings.auto_play = req.auto_play
     if req.theme is not None:
-        if req.theme not in ("dark", "light"):
-            raise HTTPException(status_code=400, detail="Theme must be 'dark' or 'light'")
+        if req.theme not in ("dark", "light", "oled", "warm"):
+            raise HTTPException(status_code=400,
+                                detail="Theme must be one of: dark, light, oled, warm")
         settings.theme = req.theme
+    if req.accent is not None:
+        accent = req.accent.strip()
+        if accent == "":
+            settings.accent = None  # back to the theme's default accent
+        elif re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+            settings.accent = accent.lower()
+        else:
+            raise HTTPException(status_code=400, detail="Accent must be '#rrggbb' or ''")
     if req.chapter_sort is not None:
         if req.chapter_sort not in ("asc", "desc"):
             raise HTTPException(status_code=400, detail="Chapter sort must be 'asc' or 'desc'")

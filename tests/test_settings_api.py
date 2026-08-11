@@ -18,7 +18,7 @@ def client(monkeypatch):
     s = db.query(database.Settings).first()
     if s:
         s.voice, s.speed, s.playback_mode = "af_heart", 1.0, "full"
-        s.theme, s.chapter_sort = "dark", "asc"
+        s.theme, s.chapter_sort, s.accent = "dark", "asc", None
         db.commit()
     db.close()
 
@@ -46,10 +46,29 @@ def test_update_valid_fields(client):
     ({"playback_mode": "turbo"}, "playback_mode"),
     ({"theme": "sepia"}, "theme"),
     ({"chapter_sort": "sideways"}, "chapter_sort"),
+    ({"accent": "purple"}, "accent"),
+    ({"accent": "#12345"}, "accent"),
+    ({"accent": "#12345g"}, "accent"),
 ])
 def test_update_rejects_invalid(client, payload, field):
     resp = client.put("/api/settings", json=payload)
     assert resp.status_code == 400, f"{field} should be rejected: {resp.text}"
+
+
+@pytest.mark.parametrize("theme", ["dark", "light", "oled", "warm"])
+def test_all_themes_accepted(client, theme):
+    resp = client.put("/api/settings", json={"theme": theme})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["theme"] == theme
+
+
+def test_accent_roundtrip_and_clear(client):
+    data = client.put("/api/settings", json={"accent": "#3B82F6"}).json()
+    assert data["accent"] == "#3b82f6"  # stored lowercased
+    assert client.get("/api/settings").json()["accent"] == "#3b82f6"
+    # Empty string clears back to the theme default (NULL)
+    data = client.put("/api/settings", json={"accent": ""}).json()
+    assert data["accent"] is None
 
 
 def test_plex_url_trailing_slash_stripped(client):

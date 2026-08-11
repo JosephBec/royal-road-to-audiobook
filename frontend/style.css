@@ -14,9 +14,12 @@
     --text-primary: #e8eaf0;
     --text-secondary: #9499b0;
     --text-muted: #5f6380;
+    /* Only --accent is a real color; hover/dim derive from it so a custom
+       accent (inline --accent on <html>, set from the Theme tab) recolors
+       everything consistently. Dark themes lighten on hover, light darken. */
     --accent: #6c5ce7;
-    --accent-hover: #7f70f0;
-    --accent-dim: rgba(108, 92, 231, 0.15);
+    --accent-hover: color-mix(in srgb, var(--accent) 82%, #fff);
+    --accent-dim: color-mix(in srgb, var(--accent) 15%, transparent);
     --success: #00cec9;
     --warning: #fdcb6e;
     --danger: #ff6b6b;
@@ -38,14 +41,43 @@
     --text-primary: #1a1d27;
     --text-secondary: #5f6380;
     --text-muted: #9499b0;
-    --accent: #6c5ce7;
-    --accent-hover: #5a4bd1;
-    --accent-dim: rgba(108, 92, 231, 0.1);
+    --accent-hover: color-mix(in srgb, var(--accent) 82%, #000);
+    --accent-dim: color-mix(in srgb, var(--accent) 10%, transparent);
     --success: #00b894;
     --warning: #f0932b;
     --danger: #e74c3c;
     --border: #dcdfe6;
     --shadow: 0 4px 24px rgba(0,0,0,0.08);
+}
+
+[data-theme="oled"] {
+    /* True black for OLED screens; everything else inherits the dark theme. */
+    --bg-primary: #000000;
+    --bg-secondary: #0a0b10;
+    --bg-card: #12131c;
+    --bg-hover: #1b1d2a;
+    --bg-input: #0c0d14;
+    --border: #23263a;
+    --shadow: 0 4px 24px rgba(0,0,0,0.6);
+}
+
+[data-theme="warm"] {
+    /* Sepia / paper reading tones — a light-family theme. */
+    --bg-primary: #f4ecdd;
+    --bg-secondary: #fdf8ee;
+    --bg-card: #fdf8ee;
+    --bg-hover: #efe6d2;
+    --bg-input: #f1e9d8;
+    --text-primary: #3d3427;
+    --text-secondary: #7a6f5c;
+    --text-muted: #a89b83;
+    --accent-hover: color-mix(in srgb, var(--accent) 82%, #000);
+    --accent-dim: color-mix(in srgb, var(--accent) 10%, transparent);
+    --success: #00b894;
+    --warning: #f0932b;
+    --danger: #e74c3c;
+    --border: #e0d5bf;
+    --shadow: 0 4px 24px rgba(80,60,20,0.1);
 }
 
 /* Disable double-tap-to-zoom (keeps pinch zoom and scrolling) */
@@ -373,10 +405,8 @@ a:hover { color: var(--accent-hover); }
     margin-bottom: 12px;
 }
 
-#voice-demo-list {
-    max-height: 50vh;
-    overflow-y: auto;
-}
+/* #voice-demo-list has no scroll of its own — the settings panel scrolls
+   (fixed-height modal); a nested scroll region just fought it on iOS. */
 
 .voice-demo-row {
     display: flex;
@@ -966,6 +996,133 @@ a:hover { color: var(--accent-hover); }
 .setting-row label {
     font-size: 0.95rem;
     font-weight: 500;
+}
+
+/* The settings dialog is a fixed-height flex column: title + tabs pinned on
+   top, Done pinned on the bottom, the active panel scrolling between them.
+   Content-sized height made the Done button jump to a different spot on
+   every tab. */
+#modal-settings .modal-content {
+    display: flex;
+    flex-direction: column;
+    height: min(640px, 85vh);
+    overflow: hidden;
+}
+#modal-settings .modal-content > h3,
+#modal-settings .settings-tabs,
+#modal-settings .modal-actions {
+    flex-shrink: 0;
+}
+#modal-settings .settings-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* Same gesture containment as .modal-wide's panel: don't hand the scroll
+       to the library once the panel ends. */
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+
+/* Theme tab: label-above-content rows (a swatch grid doesn't fit beside a
+   label the way a select does). */
+.setting-stack {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.setting-stack > label {
+    display: block;
+    font-size: 0.95rem;
+    font-weight: 500;
+    margin-bottom: 10px;
+}
+
+.theme-swatches {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+.theme-swatch {
+    background: none;
+    border: 2px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+}
+.theme-swatch.active { border-color: var(--accent); }
+.theme-swatch-preview {
+    height: 38px;
+    border-radius: 6px;
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+}
+.theme-swatch-card {
+    flex: 1;
+    height: 100%;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+.theme-swatch-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+}
+.theme-swatch-name {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+}
+
+.accent-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+.accent-dot {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+.accent-dot.active {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 3px;
+}
+/* The custom picker looks like one more dot; the native swatch fills it. */
+.accent-custom {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    overflow: hidden;
+    /* conic rainbow = "pick anything" affordance */
+    background: conic-gradient(#ff6b6b, #fdcb6e, #00cec9, #6c5ce7, #ff6b6b);
+}
+.accent-custom input[type="color"] {
+    position: absolute;
+    inset: -8px;              /* swallow the native swatch's border */
+    width: 50px;
+    height: 50px;
+    opacity: 0;
+    cursor: pointer;
+}
+.accent-custom.active {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 3px;
 }
 
 /* Placeholder rows while a novel's chapters load, so the previous book's
