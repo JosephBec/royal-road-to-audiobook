@@ -1691,19 +1691,14 @@ function updateMediaSession() {
     // element world entirely there is nothing to route wrongly: paused means
     // paused, and a pause command while paused can only be a toggle press
     // meaning resume.
-    // Never suspend the keepalive here: if the play() failed or stalled, a
-    // suspended loop would let the session die with nothing left to claim.
-    // The audio element's own play event does the bookkeeping on success.
     navigator.mediaSession.setActionHandler('play', () => {
         dlog('ms:play');
-        state.audio.play().then(() => dlog('ms:play-ok'))
-                          .catch((e) => dlog('ms:play-failed', { err: String(e) }));
+        resumeFromRemote('ms:play');
     });
     navigator.mediaSession.setActionHandler('pause', () => {
         if (state.audio.paused) {
             dlog('ms:pause-as-resume');
-            state.audio.play().then(() => dlog('ms:resume-ok'))
-                              .catch((e) => dlog('ms:resume-failed', { err: String(e) }));
+            resumeFromRemote('ms:resume');
         } else {
             dlog('ms:pause');
             state.audio.pause();
@@ -1835,6 +1830,28 @@ function stopSilentKeepalive() {
         keepaliveEl.pause();
         keepaliveEl.currentTime = 0;
     }
+}
+
+function resumeFromRemote(tag) {
+    // Stop the loop BEFORE starting the chapter. iOS granted the first
+    // background resume instantly but parked every later play() while the
+    // silence loop was still playing — the promises hung until unlock
+    // (client log 17:37, 2026-08-11). With the stage cleared the chapter is
+    // the only claimant. The watchdog restarts the loop if the chapter fails
+    // to actually produce sound, so a failed resume can't strand the session
+    // with nothing playing at all.
+    stopSilentKeepalive();
+    setTimeout(() => {
+        if (state.audio.paused) {
+            dlog(tag + '-watchdog');
+            startSilentKeepalive();
+        }
+    }, 3000);
+    state.audio.play().then(() => dlog(tag + '-ok'))
+        .catch((e) => {
+            dlog(tag + '-failed', { err: String(e) });
+            if (state.audio.paused) startSilentKeepalive();
+        });
 }
 
 function reviveMediaSession() {
