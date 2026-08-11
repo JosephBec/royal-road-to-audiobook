@@ -1957,22 +1957,37 @@ function resumeFromRemote(tag) {
     // automatic recovery (seek/reload/re-seek), built when fully-rendered
     // chapters played over progressive WAV — Safari drops a paused WAV's
     // background connection, so a bare resume could succeed on paper while
-    // producing no sound. Routing those chapters over HLS instead (see
-    // playChapter) removed the problem that machinery existed for, and its
-    // own complexity had started causing new bugs — including racing the
-    // command queue it was nested inside. Cut in favor of one honest
-    // fallback: if resuming fails outright, hold the session open and let
-    // the in-app Resume button — which has worked through every one of
-    // these tests — be the recovery path instead of another automated one.
+    // producing no sound. It was cut on the theory that routing those
+    // chapters over HLS instead removed the problem entirely. User report
+    // 2026-08-11 (heard nothing after a 6.6-minute lock-screen resume,
+    // 'playing' fired, ct barely advanced: 184.8 -> 185.4 over 3+ real
+    // seconds) says that theory was wrong at long enough pauses — HLS may
+    // zombie too, just at a longer threshold than WAV did. checkResumeAudible
+    // below is the diagnostic (log only, no recovery) needed to confirm that
+    // before rebuilding anything.
     stopSilentKeepalive();
     const a = state.audio;
+    const ct0 = a.currentTime;
     // Returned so the command queue waits for exactly this settling before
     // letting the next command touch the element (see queueMediaCommand).
-    return a.play().then(() => dlog(tag + '-ok'))
-        .catch((e) => {
-            dlog(tag + '-failed', { err: String(e) });
-            if (a.paused) startSilentKeepalive();
-        });
+    return a.play().then(() => {
+        dlog(tag + '-ok');
+        checkResumeAudible(tag, ct0);
+    }).catch((e) => {
+        dlog(tag + '-failed', { err: String(e) });
+        if (a.paused) startSilentKeepalive();
+    });
+}
+
+function checkResumeAudible(tag, ct0) {
+    // 'playing' firing and play() resolving are not proof sound is actually
+    // coming out — see resumeFromRemote's comment. This is the one thing
+    // that would have caught it: does currentTime actually advance a few
+    // seconds after a resume "succeeds"? Diagnostic only, no action taken.
+    setTimeout(() => {
+        const moved = state.audio.currentTime - ct0 > 0.5;
+        dlog(tag + '-audible', { moved: moved ? 1 : 0, ct0, ct1: state.audio.currentTime });
+    }, 3000);
 }
 
 function reviveMediaSession() {
