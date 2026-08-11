@@ -265,6 +265,30 @@ document.addEventListener('visibilitychange', () => { dlog('vis'); flushDiag(); 
 window.addEventListener('pagehide', () => { dlog('pagehide'); flushDiag(); });
 window.addEventListener('pageshow', (e) => dlog('pageshow', { persisted: e.persisted ? 1 : 0 }));
 
+// ===== Self-update =====
+// iOS Safari keeps a long-lived SPA tab on stale code through anything short
+// of a manual address-bar reload — days of "fixes" have gone untested because
+// the phone was still running last week's app.js. The page now compares the
+// stamp it was served with against the server's and reloads itself when they
+// differ, as soon as it's safe (never during playback or synthesis; a paused
+// chapter's position is already saved server-side).
+async function checkForUpdate() {
+    if (!window.__ASSET_V__ || window.__ASSET_V__ === '__' + 'V__') return;
+    try {
+        const res = await api('GET', '/api/asset-version');
+        if (String(res.version) === String(window.__ASSET_V__)) return;
+        if (state.isPlaying || state.isSynthesizing) { dlog('update-deferred'); return; }
+        dlog('update-reload', { from: String(window.__ASSET_V__), to: String(res.version) });
+        flushDiag();
+        location.reload();
+    } catch (e) { /* offline or an older server — try again next time */ }
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkForUpdate();
+});
+window.addEventListener('pageshow', checkForUpdate);
+setInterval(checkForUpdate, 5 * 60 * 1000);
+
 // ===== API Helpers =====
 async function api(method, path, body = null) {
     const opts = { method, headers: { 'Content-Type': 'application/json' } };

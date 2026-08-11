@@ -154,6 +154,13 @@ FRONTEND_DIR = Path(__file__).parent / "frontend"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
+def _asset_version() -> int:
+    """mtime-based stamp of the frontend bundle; changes whenever it does."""
+    return int(max(
+        (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
+    ))
+
+
 @app.get("/")
 async def serve_index():
     """
@@ -163,10 +170,16 @@ async def serve_index():
     never saw when it first cached an asset.
     """
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
-    version = int(max(
-        (FRONTEND_DIR / name).stat().st_mtime for name in ("app.js", "style.css")
-    ))
-    return HTMLResponse(html.replace("__V__", str(version)))
+    return HTMLResponse(html.replace("__V__", str(_asset_version())))
+
+
+@app.get("/api/asset-version")
+async def asset_version():
+    """Current frontend stamp. The page compares this against the stamp it
+    was served with and reloads itself when they differ — iOS Safari keeps a
+    long-lived SPA tab on stale code through anything short of a manual
+    address-bar reload, which made every frontend fix a coin flip."""
+    return {"version": _asset_version()}
 
 
 @app.get("/api/version")
