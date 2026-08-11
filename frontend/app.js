@@ -1854,12 +1854,14 @@ function resumeFromRemote(tag) {
     stopSilentKeepalive();
     const a = state.audio;
     const from = a.currentTime;
-    // Re-prime the decoder. After a couple of backgrounded minutes Safari has
-    // dropped the stream's connection and a bare play() resolves into ZOMBIE
-    // playback: 'playing' fires, promises resolve, currentTime never moves
-    // (client log 17:47 — three resumes frozen at 190.9s). A seek to the
-    // current position forces the pipeline to rebuild before playing.
-    if (!state._instantActive && isFinite(from)) {
+    const isHls = (a.currentSrc || '').includes('.m3u8');
+    // Re-prime the decoder — progressive WAV only. After minutes backgrounded
+    // Safari has dropped the WAV's connection and a bare play() resolves into
+    // ZOMBIE playback: 'playing' fires, promises resolve, currentTime never
+    // moves (client log 17:47 — three resumes frozen at 190.9s). HLS rebuilds
+    // its own pipeline, and seeking it here wedged an otherwise-fine resume
+    // (client log 18:24:30 — froze right after our seek).
+    if (!state._instantActive && !isHls && isFinite(from)) {
         try { a.currentTime = from; } catch (e) {}
     }
     a.play().then(() => dlog(tag + '-ok'))
@@ -1868,13 +1870,22 @@ function resumeFromRemote(tag) {
             if (a.paused) startSilentKeepalive();
         });
     // Watchdog judges by MOVEMENT, not by promises — zombies pass promises.
-    setTimeout(() => {
+    // Two-phase: an HLS resume legitimately spends ~2s rebuffering, and the
+    // first single-shot check reloaded a stream that was already recovering
+    // (client log 18:24:16). Only a playhead still frozen at the second look
+    // is a corpse.
+    const check = (attempt) => {
         if (a.paused) { dlog(tag + '-watchdog'); startSilentKeepalive(); return; }
-        if (!state._instantActive && a.currentTime - from < 0.4) {
-            dlog(tag + '-zombie', { from });
-            recoverZombiePlayback(tag, from);
+        if (state._instantActive || Math.abs(a.currentTime - from) > 0.3) return;
+        if (attempt === 1) {
+            dlog(tag + '-slow');
+            setTimeout(() => check(2), 3000);
+            return;
         }
-    }, 2500);
+        dlog(tag + '-zombie', { from });
+        recoverZombiePlayback(tag, from);
+    };
+    setTimeout(() => check(1), 2500);
 }
 
 async function recoverZombiePlayback(tag, pos) {
@@ -1900,8 +1911,13 @@ async function recoverZombiePlayback(tag, pos) {
         if (a.paused) startSilentKeepalive();
         return;
     }
+    // Judge success by movement from wherever the recovery actually landed —
+    // an HLS seek snaps to a segment boundary a few seconds shy of the
+    // target, which the old "moved from pos" metric scored as failure while
+    // audio was audibly playing (client log 18:24:46, moved:0 at ct 208.6).
+    const landed = a.currentTime;
     setTimeout(() => {
-        const moved = a.currentTime - pos > 0.4;
+        const moved = a.currentTime - landed > 0.4;
         dlog(tag + '-post-recover', { moved: moved ? 1 : 0 });
         if (!moved && a.paused) startSilentKeepalive();
     }, 2500);
