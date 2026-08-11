@@ -25,7 +25,7 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, text_to_description_html
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
@@ -437,7 +437,7 @@ def parse_epub_file(path: Path, min_chapter_words: int = MIN_CHAPTER_WORDS) -> P
         parsed.author = creator[0][0]
     desc = book.get_metadata("DC", "description")
     if desc:
-        parsed.description = clean_html_to_text(desc[0][0])
+        parsed.description = text_to_description_html(clean_html_to_text(desc[0][0]))
 
     parsed.cover, parsed.cover_ext = extract_cover_image(book)
 

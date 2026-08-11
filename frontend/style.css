@@ -584,6 +584,12 @@ a:hover { color: var(--accent-hover); }
     display: none;
 }
 
+.novel-description p { margin-bottom: 0.8em; }
+.novel-description p:last-child { margin-bottom: 0; }
+.novel-description ul,
+.novel-description ol { margin: 0 0 0.8em 1.2em; }
+.novel-description a { text-decoration: underline; }
+
 .desc-toggle {
     background: none;
     border: none;

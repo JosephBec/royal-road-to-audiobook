@@ -664,9 +664,12 @@ async function openNovel(novelId, opts = {}) {
     cover.src = novel.cover_url || '';
     cover.style.display = novel.cover_url ? 'block' : 'none';
 
-    // Description: collapsed to 4 lines; show "Read more" only if it overflows
+    // Description: collapsed to 4 lines; show "Read more" only if it overflows.
+    // Server-sanitized HTML (paragraphs + links only — see
+    // scrapers.base.sanitize_description_html / text_to_description_html),
+    // safe to render directly.
     const descEl = document.getElementById('novel-description');
-    descEl.textContent = novel.description || '';
+    descEl.innerHTML = novel.description || '';
     descEl.classList.add('clamped');
     const descToggle = document.getElementById('desc-toggle');
     descToggle.textContent = 'Read more';

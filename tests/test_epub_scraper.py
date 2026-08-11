@@ -23,7 +23,7 @@ def test_parse_epub_file(tmp_path):
     parsed = epub_local.parse_epub_file(path)
     assert parsed.title == "My Book"
     assert parsed.author == "Jane Doe"
-    assert parsed.description == "A story."
+    assert parsed.description == "<p>A story.</p>"
     assert [ch.title for ch in parsed.chapters] == ["Chapter One", "Chapter Two"]
     assert parsed.chapters[0].index == 0
     assert all(ch.word_count >= 20 for ch in parsed.chapters)

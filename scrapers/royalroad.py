@@ -13,7 +13,7 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, sanitize_description_html
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class RoyalRoadScraper(BaseScraper):
         desc_tag = soup.select_one("div.description div.hidden-content")
         if not desc_tag:
             desc_tag = soup.select_one("div.description")
-        description = desc_tag.get_text(strip=True) if desc_tag else ""
+        description = sanitize_description_html(desc_tag) if desc_tag else ""
 
         return {
             "title": title,

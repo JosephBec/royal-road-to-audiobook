@@ -17,7 +17,7 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, sanitize_description_html
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class RanobesScraper(BaseScraper):
             cover_url = urljoin(BASE, cover_tag["src"])
 
         desc_tag = soup.select_one(".moreless__full") or soup.select_one(".cont-in .showcont-h")
-        description = desc_tag.get_text(strip=True) if desc_tag else ""
+        description = sanitize_description_html(desc_tag) if desc_tag else ""
 
         return {
             "title": title,
