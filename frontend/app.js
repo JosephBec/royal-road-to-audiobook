@@ -1678,6 +1678,14 @@ function setupAudioEvents() {
 const SKIP_BACK_SECONDS = 15;
 const SKIP_FORWARD_SECONDS = 30;
 
+// Runs play/pause commands strictly one at a time — see the setActionHandler
+// comments below for why. Never lets one command's rejection block the next.
+let mediaCommandChain = Promise.resolve();
+function queueMediaCommand(fn) {
+    mediaCommandChain = mediaCommandChain.then(fn, fn).catch(() => {});
+    return mediaCommandChain;
+}
+
 function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
@@ -1704,18 +1712,29 @@ function updateMediaSession() {
     // element world entirely there is nothing to route wrongly: paused means
     // paused, and a pause command while paused can only be a toggle press
     // meaning resume.
+    // play/pause are serialized through mediaCommandChain (below): a resume's
+    // play() can take a couple of seconds to settle while backgrounded, and
+    // a second command arriving mid-flight called pause() on that unsettled
+    // play() — which aborts it (AbortError) and, per the client log
+    // (2026-08-11 21:45), leaves iOS refusing to deliver ANY further
+    // lock-screen command for the rest of the session, not just that one.
+    // The page itself stayed alive throughout (the keepalive kept ticking) —
+    // only iOS's command routing broke. Queuing so each command's audio
+    // element interaction is allowed to fully settle before the next one
+    // touches it removes the exact race that triggered it.
     navigator.mediaSession.setActionHandler('play', () => {
         dlog('ms:play');
-        resumeFromRemote('ms:play');
+        queueMediaCommand(() => resumeFromRemote('ms:play'));
     });
     navigator.mediaSession.setActionHandler('pause', () => {
-        if (state.audio.paused) {
-            dlog('ms:pause-as-resume');
-            resumeFromRemote('ms:resume');
-        } else {
+        queueMediaCommand(() => {
+            if (state.audio.paused) {
+                dlog('ms:pause-as-resume');
+                return resumeFromRemote('ms:resume');
+            }
             dlog('ms:pause');
             state.audio.pause();
-        }
+        });
     });
     // Fixed skip amounts matching the in-app buttons. iOS draws its own icon
     // (often "10") but the page controls the actual jump.
@@ -1896,7 +1915,12 @@ function resumeFromRemote(tag) {
     if (!state._instantActive && !isHls && isFinite(from)) {
         try { a.currentTime = from; } catch (e) {}
     }
-    a.play().then(() => dlog(tag + '-ok'))
+    // Returned so the command queue waits for exactly this — play() settling
+    // — and no longer than that. The zombie watchdog/recovery below runs
+    // independently and is NOT part of what the queue waits on: a resume
+    // that's slowly rebuffering must not block a genuine pause command that
+    // arrives a moment later, only protect it from racing this play() call.
+    const settled = a.play().then(() => dlog(tag + '-ok'))
         .catch((e) => {
             dlog(tag + '-failed', { err: String(e) });
             if (a.paused) startSilentKeepalive();
@@ -1918,6 +1942,7 @@ function resumeFromRemote(tag) {
         recoverZombiePlayback(tag, from);
     };
     setTimeout(() => check(1), 2500);
+    return settled;
 }
 
 async function recoverZombiePlayback(tag, pos) {
