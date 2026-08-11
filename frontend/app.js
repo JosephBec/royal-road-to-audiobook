@@ -1841,6 +1841,26 @@ function primeKeepalive() {
 }
 
 let keepaliveAssertTimer = null;
+let keepaliveLastCt = null;   // currentTime at the previous tick — see checkKeepaliveAlive
+
+function checkKeepaliveAlive() {
+    // Diagnostic only — no recovery action. Client log 2026-08-11 22:19
+    // showed lock-screen commands stop arriving with no error, no collision,
+    // nothing our own code could see go wrong — while our JS-side state kept
+    // reporting the loop as still "looping" the whole time. That split is
+    // possible on iOS: an element can report .paused === false while the OS
+    // has already reclaimed the actual background audio session underneath
+    // it, silently. currentTime frozen between two ticks 5s apart is real
+    // evidence of that (a genuinely playing loop's position essentially
+    // never lands on the exact same float twice); this exists to prove or
+    // rule that out before anyone builds a fix aimed at the wrong target.
+    if (!keepaliveEl || keepaliveEl.paused) { keepaliveLastCt = null; return; }
+    const ct = keepaliveEl.currentTime;
+    if (keepaliveLastCt !== null && ct === keepaliveLastCt) {
+        dlog('kl:frozen', { ct });
+    }
+    keepaliveLastCt = ct;
+}
 
 function assertPausedState(why) {
     // WebKit periodically re-derives the Now Playing state from whichever
@@ -1891,7 +1911,11 @@ function startSilentKeepalive() {
             .then(() => { keepaliveStarting = null; });
     }
     if (!keepaliveAssertTimer) {
-        keepaliveAssertTimer = setInterval(() => assertPausedState('tick'), 5000);
+        keepaliveLastCt = null;
+        keepaliveAssertTimer = setInterval(() => {
+            assertPausedState('tick');
+            checkKeepaliveAlive();
+        }, 5000);
     }
     if (keepaliveExpiry) clearTimeout(keepaliveExpiry);
     keepaliveExpiry = setTimeout(() => { dlog('kl:expiry'); stopSilentKeepalive(); },
@@ -1901,6 +1925,7 @@ function startSilentKeepalive() {
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
     if (keepaliveAssertTimer) { clearInterval(keepaliveAssertTimer); keepaliveAssertTimer = null; }
+    keepaliveLastCt = null;
     const doPause = () => {
         if (keepaliveEl && !keepaliveEl.paused) {
             dlog('kl:stop');
