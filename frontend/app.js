@@ -1801,6 +1801,11 @@ function keepaliveEnabled() {
     return localStorage.getItem(KEEPALIVE_KEY) !== '0';
 }
 
+// Tracks an in-flight play() on keepaliveEl — from either primeKeepalive or
+// startSilentKeepalive, the only two places that call it — so
+// stopSilentKeepalive never pauses it before it settles. See that function.
+let keepaliveStarting = null;
+
 function primeKeepalive() {
     // iOS grants play() permission per element, per gesture. Play the silence
     // for a moment under the first real tap so that starting it later from a
@@ -1822,12 +1827,17 @@ function primeKeepalive() {
     }
     const p = keepaliveEl.play();
     if (!p) { keepalivePrimed = true; return; }
-    p.then(() => {
+    // Tracked the same way startSilentKeepalive tracks its own play() calls
+    // (see keepaliveStarting) — this is a second entry point onto the same
+    // element, and stopSilentKeepalive must not pause either one before it
+    // settles.
+    keepaliveStarting = p.then(() => {
         keepaliveEl.pause();
         keepaliveEl.currentTime = 0;
         keepalivePrimed = true;
         dlog('kl:primed');
-    }).catch((e) => dlog('kl:prime-failed', { err: String(e) }));
+    }).catch((e) => dlog('kl:prime-failed', { err: String(e) }))
+      .then(() => { keepaliveStarting = null; });
 }
 
 let keepaliveAssertTimer = null;
@@ -1875,8 +1885,10 @@ function startSilentKeepalive() {
     // the Now Playing entry and command delivery — but not forever.
     if (!keepaliveEnabled() || !keepaliveEl) return;
     if (keepaliveEl.paused) {
-        keepaliveEl.play().then(() => { dlog('kl:loop-ok'); assertPausedState('loop-ok'); })
-                          .catch((e) => dlog('kl:loop-failed', { err: String(e) }));
+        keepaliveStarting = keepaliveEl.play()
+            .then(() => { dlog('kl:loop-ok'); assertPausedState('loop-ok'); })
+            .catch((e) => dlog('kl:loop-failed', { err: String(e) }))
+            .then(() => { keepaliveStarting = null; });
     }
     if (!keepaliveAssertTimer) {
         keepaliveAssertTimer = setInterval(() => assertPausedState('tick'), 5000);
@@ -1889,10 +1901,25 @@ function startSilentKeepalive() {
 function stopSilentKeepalive() {
     if (keepaliveExpiry) { clearTimeout(keepaliveExpiry); keepaliveExpiry = null; }
     if (keepaliveAssertTimer) { clearInterval(keepaliveAssertTimer); keepaliveAssertTimer = null; }
-    if (keepaliveEl && !keepaliveEl.paused) {
-        dlog('kl:stop');
-        keepaliveEl.pause();
-        keepaliveEl.currentTime = 0;
+    const doPause = () => {
+        if (keepaliveEl && !keepaliveEl.paused) {
+            dlog('kl:stop');
+            keepaliveEl.pause();
+            keepaliveEl.currentTime = 0;
+        }
+    };
+    // The same race already fixed for the chapter element (queueMediaCommand)
+    // exists here too: pausing a play() before it settles leaves a stale
+    // native 'play' event queued, which can fire LATER — client log
+    // 2026-08-11 22:05 caught the loop's 'play' event firing 1.9s after we'd
+    // already called pause() on it, while the chapter was actively playing.
+    // Two elements briefly both "playing" is exactly the condition that has
+    // killed command routing before. Wait for a pending start to settle
+    // before ever calling pause() on it.
+    if (keepaliveStarting) {
+        keepaliveStarting.then(doPause);
+    } else {
+        doPause();
     }
 }
 
