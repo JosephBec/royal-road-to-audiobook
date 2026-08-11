@@ -110,6 +110,19 @@ function themeFamily(theme) {
     return THEMES.find(t => t.id === theme)?.family || 'dark';
 }
 
+// Theme + accent are per-device: a stored local choice beats the server value,
+// so the phone can run OLED while the desktop runs Warm. The server copy still
+// updates on every change — it's the starting look for a brand-new device.
+const LOCAL_THEME_KEY = 'localTheme';
+const LOCAL_ACCENT_KEY = 'localAccent';   // '' = explicitly the default accent
+
+function overlayLocalTheme() {
+    const t = localStorage.getItem(LOCAL_THEME_KEY);
+    if (t && THEMES.some(th => th.id === t)) state.settings.theme = t;
+    const a = localStorage.getItem(LOCAL_ACCENT_KEY);
+    if (a !== null) state.settings.accent = a || null;
+}
+
 function applyTheme(theme) {
     if (!THEMES.some(t => t.id === theme)) theme = 'dark';
     document.documentElement.setAttribute('data-theme', theme);
@@ -147,6 +160,7 @@ function toggleTheme() {
 }
 
 function setTheme(theme) {
+    localStorage.setItem(LOCAL_THEME_KEY, theme);
     state.settings.theme = theme;
     applyTheme(theme);
     updateSetting('theme', theme);
@@ -154,6 +168,7 @@ function setTheme(theme) {
 }
 
 function setAccent(accent) {
+    localStorage.setItem(LOCAL_ACCENT_KEY, accent || '');
     state.settings.accent = accent || null;
     applyAccent(state.settings.accent);
     // '' (not null) tells the server "clear it" — null means "not provided".
@@ -1775,6 +1790,7 @@ function startProgressSaving() {
 async function loadSettings() {
     try {
         state.settings = await api('GET', '/api/settings');
+        overlayLocalTheme();
     } catch (e) {
         console.error('Failed to load settings:', e);
     }
@@ -1841,6 +1857,8 @@ function renderEngineHint() {
 }
 
 function openSettings() {
+    // Settings apply live; Cancel means "put everything back how it was".
+    state._settingsSnapshot = { ...state.settings, _keepalive: keepaliveEnabled() };
     document.getElementById('modal-settings').style.display = 'flex';
 
     // Populate model dropdown. With no engines reported (a server older than
@@ -2013,7 +2031,43 @@ function applyPlaybackRate() {
 
 function closeSettings() {
     stopVoiceDemo();
+    state._settingsSnapshot = null;
     document.getElementById('modal-settings').style.display = 'none';
+}
+
+async function cancelSettings() {
+    const snap = state._settingsSnapshot;
+    closeSettings();
+    if (!snap) return;
+
+    // Device-local pieces first.
+    localStorage.setItem(KEEPALIVE_KEY, snap._keepalive ? '1' : '0');
+    localStorage.setItem(LOCAL_THEME_KEY, snap.theme);
+    localStorage.setItem(LOCAL_ACCENT_KEY, snap.accent || '');
+
+    // One PUT with every server field that drifted while the modal was open.
+    const fields = ['engine', 'voice', 'speed', 'playback_mode', 'auto_play',
+                    'theme', 'chapter_sort', 'audiobook_dir',
+                    'plex_url', 'plex_token', 'plex_section_id'];
+    const diff = {};
+    for (const key of fields) {
+        if (state.settings[key] !== snap[key]) diff[key] = snap[key];
+    }
+    if ((state.settings.accent || null) !== (snap.accent || null)) diff.accent = snap.accent || '';
+    try {
+        if (Object.keys(diff).length) {
+            state.settings = await api('PUT', '/api/settings', diff);
+        }
+        overlayLocalTheme();
+        applyTheme(state.settings.theme);
+        applyAccent(state.settings.accent);
+        applyPlaybackRate();
+        if ('chapter_sort' in diff && state.currentNovel) await loadChapters();
+        if (Object.keys(diff).length) showToast('Settings changes discarded');
+    } catch (e) {
+        console.error('Failed to revert settings:', e);
+        showToast('Could not undo all changes');
+    }
 }
 
 // ===== Favorites =====
@@ -2527,6 +2581,9 @@ async function updateNovelSetting(field, value) {
 async function updateSetting(key, value) {
     try {
         state.settings = await api('PUT', '/api/settings', { [key]: value });
+        // The response carries the server's theme/accent; this device's own
+        // choice must survive saves of unrelated settings.
+        overlayLocalTheme();
         // Apply live playback rate change
         if (key === 'speed') {
             applyPlaybackRate();
@@ -2880,6 +2937,7 @@ function setupEventListeners() {
     // Settings
     document.getElementById('btn-settings').addEventListener('click', openSettings);
     document.getElementById('btn-settings-close').addEventListener('click', closeSettings);
+    document.getElementById('btn-settings-cancel').addEventListener('click', cancelSettings);
 
     document.getElementById('setting-engine').addEventListener('change', async (e) => {
         // The server snaps the voice to one the new engine has; re-read it

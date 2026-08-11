@@ -1039,10 +1039,20 @@ a:hover { color: var(--accent-hover); }
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    /* Clearance for the scrollbar — without it the bar sat on top of the
+       right-column theme swatches' borders. */
+    padding-right: 12px;
     /* Same gesture containment as .modal-wide's panel: don't hand the scroll
        to the library once the panel ends. */
     overscroll-behavior: contain;
     touch-action: pan-y;
+}
+
+/* Cancel discards (reverts every change made while open), Save keeps.
+   Equal-width pair so the bottom of the dialog feels balanced. */
+#modal-settings .modal-actions button {
+    flex: 1;
+    padding: 12px;
 }
 
 /* Theme tab: label-above-content rows (a swatch grid doesn't fit beside a
@@ -1547,8 +1557,16 @@ a:hover { color: var(--accent-hover); }
     }
     #library-view-toggle { padding: 8px 10px; }
 
-    /* Icon-only novel action buttons (⚙ ↻ 💾) — labels are implied */
+    /* Icon-only novel action buttons (⚙ ↻ 💾) — labels are implied. The row
+       stretches to the resume button's width with equal-size targets, instead
+       of a cramped huddle that ran right up to Save. */
     .btn-label { display: none; }
+    .novel-header-actions { width: 100%; gap: 10px; }
+    .novel-header-actions .secondary-btn {
+        flex: 1;
+        padding: 10px 0;
+        text-align: center;
+    }
     .novel-header { flex-direction: column; }
     .novel-info { flex-direction: column; align-items: center; text-align: center; }
     #mini-player { padding: 6px 12px; }
