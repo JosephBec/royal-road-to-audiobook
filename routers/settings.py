@@ -122,6 +122,10 @@ async def update_settings(req: UpdateSettingsRequest, db: Session = Depends(get_
         ids = {ch.id for novel in inheriting for ch in novel.chapters}
         if ids:
             remove_chapter_audio(ids)
+            # Most of the cache may just have vanished; start re-earning the
+            # reading window's openings now, not on the next idle tick.
+            import prefetch
+            prefetch.request_sweep()
 
     logger.info("Settings updated: engine=%s, voice=%s, speed=%.1f, mode=%s, auto_play=%s",
                 settings.engine, settings.voice, settings.speed,
