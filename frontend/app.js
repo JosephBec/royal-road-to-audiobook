@@ -216,8 +216,8 @@ function renderThemePanel() {
     const activeFamily = themeFamily(state.settings.theme);
 
     document.getElementById('theme-mode-switch').innerHTML = `
-        <button class="theme-mode-btn${activeFamily === 'dark' ? ' active' : ''}" data-mode="dark">\u{1F319} Dark</button>
-        <button class="theme-mode-btn${activeFamily === 'light' ? ' active' : ''}" data-mode="light">\u{2600}\u{FE0F} Light</button>`;
+        <button class="theme-mode-btn${activeFamily === 'dark' ? ' active' : ''}" data-mode="dark">${ICONS.moon} Dark</button>
+        <button class="theme-mode-btn${activeFamily === 'light' ? ' active' : ''}" data-mode="light">${ICONS.sun} Light</button>`;
 
     for (const family of ['dark', 'light']) {
         const chosen = chosenTheme(family);
@@ -305,11 +305,15 @@ async function api(method, path, body = null) {
 }
 
 // ===== Icons =====
-// Plain-text glyphs (←, ↗, ↻, ↺, ⇅, ☰, ✕, −, ▶, ★, ☆, ✓, ✗, ⚙) default to
-// monochrome text rendering on every platform and need nothing here. These
-// are the handful of concepts that don't have a safe text equivalent — real
-// emoji codepoints (🌙☀️📦🗣💾⏳📖) or ones iOS renders in color despite
-// looking like plain symbols (⏸, part of the "media control" emoji set) —
+// Plain-text glyphs (←, ↗, ↻, ↺, ⇅, ☰, ✕, −, ▶, ★, ☆, ✓, ✗) render as
+// monochrome text on every platform tried and need nothing here. ⚙ (GEAR)
+// was assumed to be in that group and wasn't — it rendered in color on a
+// real device — so don't add another "safe" text glyph without checking it
+// on-device; the SVGs below exist because assumed Unicode presentation
+// defaults are not something to trust. These are the concepts that don't
+// have a safe text equivalent — real emoji codepoints (🌙☀️📦🗣💾⏳📖) or
+// ones iOS renders in color despite looking like plain symbols (⏸, part of
+// the "media control" emoji set; ⚙, confirmed the same way) —
 // replaced with small inline SVGs (stroke/fill: currentColor, so they theme
 // and recolor for free) rather than gambling on any given platform's emoji
 // presentation defaults.
@@ -322,6 +326,7 @@ const ICONS = {
     hourglass: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"/></svg>',
     book: '<svg viewBox="0 0 24 24" width="1.6em" height="1.6em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13c-3-.5-6 0-8 1.5z"/><path d="M12 6v13"/></svg>',
     pause: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.4M12 18.1v2.4M20.5 12h-2.4M5.9 12H3.5M18 6l-1.7 1.7M7.7 16.3L6 18M18 18l-1.7-1.7M7.7 7.7L6 6"/></svg>',
 };
 
 function escapeHtml(s) {
@@ -966,7 +971,7 @@ async function refreshNovel() {
     if (!state.currentNovel) return;
     const btn = document.getElementById('btn-refresh');
     btn.disabled = true;
-    btn.innerHTML = '↻<span class="btn-label"> Refreshing...</span>';
+    btn.innerHTML = '↻<span class="btn-label">Refreshing...</span>';
 
     try {
         const result = await api('POST', `/api/novels/${state.currentNovel.id}/refresh`);
@@ -983,7 +988,7 @@ async function refreshNovel() {
         showToast('Refresh failed: ' + e.message);
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '↻<span class="btn-label"> Refresh</span>';
+        btn.innerHTML = '↻<span class="btn-label">Refresh</span>';
     }
 }
 

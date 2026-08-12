@@ -183,6 +183,10 @@ a:hover { color: var(--accent-hover); }
 .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     background: var(--bg-card);
     color: var(--text-primary);
     border: 1px solid var(--border);
@@ -196,6 +200,10 @@ a:hover { color: var(--accent-hover); }
 .secondary-btn:hover { background: var(--bg-hover); }
 
 .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -892,6 +900,9 @@ a:hover { color: var(--accent-hover); }
 }
 
 .ctrl-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -1605,7 +1616,7 @@ a:hover { color: var(--accent-hover); }
     }
     #library-view-toggle { padding: 8px 10px; }
 
-    /* Icon-only novel action buttons (⚙ ↻ 💾) — labels are implied. The row
+    /* Icon-only novel action buttons — labels are implied. The row
        stretches to the resume button's width with equal-size targets, instead
        of a cramped huddle that ran right up to Save. */
     .btn-label { display: none; }
