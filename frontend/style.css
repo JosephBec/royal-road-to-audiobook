@@ -1219,6 +1219,18 @@ a:hover { color: var(--accent-hover); }
 .skeleton-bar--num { width: 2em; margin-right: 12px; }
 .skeleton-bar--title { width: min(60%, 320px); }
 
+/* Library placeholder cards, first paint before any novel has loaded —
+   same shimmer, same block, applied to a card-shaped footprint instead of
+   a chapter row. */
+.novel-card--skeleton { pointer-events: none; }
+.novel-card--skeleton:hover { transform: none; box-shadow: none; }
+.novel-card--skeleton .novel-card-cover,
+.novel-card--skeleton .novel-row-cover { animation-delay: -0.3s; }
+.skeleton-bar--card-title { display: block; height: 1em; width: 80%; margin-bottom: 8px; }
+.novel-card--row .skeleton-bar--card-title { margin-bottom: 6px; width: 55%; }
+.skeleton-bar--card-author { display: block; height: 0.8em; width: 50%; }
+.novel-card--row .skeleton-bar--card-author { width: 30%; }
+
 @keyframes skeleton-shimmer {
     from { background-position: 200% 0; }
     to { background-position: -200% 0; }

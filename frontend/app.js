@@ -503,15 +503,39 @@ function novelRowHtml(novel) {
     `;
 }
 
+function skeletonCardHtml() {
+    return `
+        <div class="novel-card novel-card--skeleton">
+            <div class="novel-card-cover-wrap"><div class="novel-card-cover skeleton-bar"></div></div>
+            <div class="novel-card-body">
+                <div class="skeleton-bar skeleton-bar--card-title"></div>
+                <div class="skeleton-bar skeleton-bar--card-author"></div>
+            </div>
+        </div>`;
+}
+
+function skeletonRowHtml() {
+    return `
+        <div class="novel-card novel-card--row novel-card--skeleton">
+            <div class="novel-row-cover skeleton-bar"></div>
+            <div class="novel-row-text">
+                <div class="skeleton-bar skeleton-bar--card-title"></div>
+                <div class="skeleton-bar skeleton-bar--card-author"></div>
+            </div>
+        </div>`;
+}
+
 function renderLibrary() {
     const grid = document.getElementById('novel-grid');
     const empty = document.getElementById('library-empty');
     const novels = sortedNovels();
 
     if (novels.length === 0 && !state.libraryLoaded) {
-        // Nothing fetched yet: say nothing rather than claiming the library
-        // is empty, which is a different and alarming statement.
-        grid.innerHTML = '';
+        // Nothing fetched yet: skeleton cards rather than a blank grid — the
+        // chapter list inside a novel already does this; the library never
+        // did, so the first paint on a slow connection looked broken.
+        const isList = state.libraryView === 'list';
+        grid.innerHTML = Array.from({ length: 8 }, isList ? skeletonRowHtml : skeletonCardHtml).join('');
         empty.style.display = 'none';
         return;
     }
