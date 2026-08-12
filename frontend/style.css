@@ -265,6 +265,10 @@ a:hover { color: var(--accent-hover); }
 }
 
 .lib-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
     background: var(--bg-card);
     color: var(--text-secondary);
     border: 1px solid var(--border);
@@ -1103,6 +1107,10 @@ a:hover { color: var(--accent-hover); }
 }
 .theme-mode-btn {
     flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     padding: 8px;
     border: none;
     border-radius: 6px;
