@@ -85,10 +85,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     await bootStep('playback rate', () => applyPlaybackRate());
     await bootStep('voices', loadVoices);
     await bootStep('library', loadLibrary);
+    // Loading directly on a #novel/123 URL (a reload, a bookmark) — the
+    // hashchange listener only reacts to CHANGES, so a hash already present
+    // before it was attached needs this separate check.
+    const initialNovelId = novelIdFromHash();
+    if (initialNovelId) {
+        await bootStep('deep link', () => openNovel(initialNovelId, { viaHistory: true }));
+    }
     await bootStep('exports', () => startExportsPolling());
 });
 
+function novelIdFromHash() {
+    const m = location.hash.match(/^#novel\/(\d+)$/);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+// Fires for a tab switch (#favorites <-> library, via replaceState — no
+// history entry, so this is the only place that reacts to it) AND for
+// entering/leaving a novel (via pushState in openNovel/closeNovel, OR a
+// real browser navigation — swipe-back, the address bar, forward/back).
+// Passing viaHistory so those two don't call history.pushState/replaceState
+// again over a URL the browser itself already just changed.
 window.addEventListener('hashchange', () => {
+    const novelId = novelIdFromHash();
+    if (novelId) {
+        if (state.libraryLoaded && state.currentNovel?.id !== novelId) {
+            openNovel(novelId, { viaHistory: true });
+        }
+        return;
+    }
+    if (state.currentNovel) closeNovel({ viaHistory: true });
     state.libraryTab = location.hash === '#favorites' ? 'favorites' : 'all';
     applyLibraryTab();
 });
@@ -659,6 +685,17 @@ async function openNovel(novelId, opts = {}) {
     const novel = state.novels.find(n => n.id === novelId);
     if (!novel) return;
 
+    // A real URL change per novel — so iOS Safari's edge-swipe-back gesture
+    // has somewhere to go back TO. Before this, opening a novel never left
+    // the SPA's single URL, and swipe-back (which needs actual browser
+    // history) had nothing to do. Skipped when this call is itself the
+    // reaction to a history navigation (see the hashchange listener) or a
+    // re-open of the novel already showing, so it can't stack duplicate
+    // entries a swipe would then have to fight through.
+    if (!opts.viaHistory && state.currentNovel?.id !== novelId) {
+        history.pushState({ novel: novelId }, '', `#novel/${novelId}`);
+    }
+
     state.currentNovel = novel;
     // Drop the previous novel's chapters before the view switches. They used
     // to stay on screen until the new fetch returned, so opening a second
@@ -788,12 +825,20 @@ async function resumeNovel(novel, chapterId) {
     }
 }
 
-function closeNovel() {
+function closeNovel(opts = {}) {
     document.getElementById('novel-view').classList.remove('active');
     document.getElementById('library-view').classList.add('active');
     state.currentNovel = null;
     updateAddNovelVisibility();
     loadLibrary();
+    // Called two ways: a user action (Back button, the "Novel TTS" title) —
+    // which never went through browser navigation, so the #novel/... hash
+    // is still sitting in the URL and has to be cleared by hand — or as the
+    // reaction to one (swipe-back), where the browser already changed the
+    // URL for us and doing it again would push a stray extra entry.
+    if (!opts.viaHistory) {
+        history.replaceState(null, '', state.libraryTab === 'favorites' ? '#favorites' : location.pathname);
+    }
 }
 
 function showChapterListLoading() {
