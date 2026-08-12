@@ -130,7 +130,7 @@ function applyTheme(theme) {
     // round-trips to what you actually chose (device-local by design).
     localStorage.setItem(themeFamily(theme) === 'dark' ? 'lastDarkTheme' : 'lastLightTheme', theme);
     const btn = document.getElementById('btn-theme-toggle');
-    btn.textContent = themeFamily(theme) === 'dark' ? '\u{1F319}' : '\u{2600}\u{FE0F}';
+    btn.innerHTML = themeFamily(theme) === 'dark' ? ICONS.moon : ICONS.sun;
     syncThemeColorMeta();
 }
 
@@ -278,6 +278,26 @@ async function api(method, path, body = null) {
     return resp.json();
 }
 
+// ===== Icons =====
+// Plain-text glyphs (←, ↗, ↻, ↺, ⇅, ☰, ✕, −, ▶, ★, ☆, ✓, ✗, ⚙) default to
+// monochrome text rendering on every platform and need nothing here. These
+// are the handful of concepts that don't have a safe text equivalent — real
+// emoji codepoints (🌙☀️📦🗣💾⏳📖) or ones iOS renders in color despite
+// looking like plain symbols (⏸, part of the "media control" emoji set) —
+// replaced with small inline SVGs (stroke/fill: currentColor, so they theme
+// and recolor for free) rather than gambling on any given platform's emoji
+// presentation defaults.
+const ICONS = {
+    moon: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><path d="M20.9 14.5A9 9 0 1 1 9.5 3.1a7 7 0 0 0 11.4 11.4z"/></svg>',
+    sun: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>',
+    archive: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="1.5"/><path d="M3 8l2-4h14l2 4"/><path d="M9.5 12.5h5"/></svg>',
+    speech: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-4 4V5z"/></svg>',
+    save: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h11l3 3v15H5V3z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg>',
+    hourglass: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"/></svg>',
+    book: '<svg viewBox="0 0 24 24" width="1.6em" height="1.6em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13c-3-.5-6 0-8 1.5z"/><path d="M12 6v13"/></svg>',
+    pause: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
+};
+
 function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -408,12 +428,12 @@ function novelCardHtml(novel) {
     const unread = unreadCount(novel);
     return `
         <div class="novel-card" data-id="${novel.id}">
-            <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+            <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '★' : '☆'}</button>
             <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             <div class="novel-card-cover-wrap">
                 ${novel.cover_url
                     ? `<img class="novel-card-cover" src="${escapeHtml(novel.cover_url)}" alt="${escapeHtml(novel.title)}" loading="lazy" draggable="false">`
-                    : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">📖</div>`
+                    : `<div class="novel-card-cover" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem;">${ICONS.book}</div>`
                 }
                 ${unread > 0 ? `<span class="unread-blob" title="${unread} unread chapters">${unread > 99 ? '99+' : unread}</span>` : ''}
             </div>
@@ -438,7 +458,7 @@ function novelRowHtml(novel) {
         <div class="novel-card novel-card--row" data-id="${novel.id}">
             ${novel.cover_url
                 ? `<img class="novel-row-cover" src="${escapeHtml(novel.cover_url)}" alt="" loading="lazy" draggable="false">`
-                : `<div class="novel-row-cover novel-row-cover--empty">📖</div>`
+                : `<div class="novel-row-cover novel-row-cover--empty">${ICONS.book}</div>`
             }
             <div class="novel-row-text">
                 <div class="novel-card-title">${escapeHtml(novel.title)}</div>
@@ -450,7 +470,7 @@ function novelRowHtml(novel) {
                     ? `<span class="progress-badge" data-novel-id="${novel.id}" title="Resume from here">▶ Ch. ${novel.progress_chapter}</span>`
                     : `<span class="novel-row-chapters">${novel.total_chapters} chs</span>`
                 }
-                <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '⭐' : '☆'}</button>
+                <button class="novel-card-fav${novel.favorite ? ' is-fav' : ''}" data-id="${novel.id}" title="${novel.favorite ? 'Unfavorite' : 'Favorite'}">${novel.favorite ? '★' : '☆'}</button>
                 <button class="novel-card-delete" data-id="${novel.id}" title="Remove">✕</button>
             </div>
         </div>
@@ -988,7 +1008,7 @@ async function playChapter(chapter, novel = state.currentNovel) {
     // Start synthesis
     loadingEl.style.display = 'inline';
     loadingEl.textContent = (mode === 'instant') ? 'Starting...' : 'Synthesizing...';
-    playBtn.textContent = '⏳';
+    playBtn.innerHTML = ICONS.hourglass;
     state.isSynthesizing = true;
 
     let synthResult;
@@ -1088,9 +1108,9 @@ async function playFullFile(chapterId) {
     try {
         await state.audio.play();
         state.isPlaying = true;
-        playBtn.textContent = '⏸';
+        playBtn.innerHTML = ICONS.pause;
     } catch (e) {
-        playBtn.textContent = '▶';
+        playBtn.innerHTML = '▶';
         state.isPlaying = false;
     }
 
@@ -1326,7 +1346,7 @@ async function playInstantSegments(chapterId) {
                 state.audio.removeEventListener('canplaythrough', onCanPlay);
                 state.audio.play().then(() => {
                     state.isPlaying = true;
-                    playBtn.textContent = '⏸';
+                    playBtn.innerHTML = ICONS.pause;
                     loadingEl.style.display = 'none';
                     state.isSynthesizing = false;
                     updateMediaSession();
@@ -1425,10 +1445,10 @@ async function playInstantSegments(chapterId) {
                     try {
                         await state.audio.play();
                         state.isPlaying = true;
-                        playBtn.textContent = '⏸';
+                        playBtn.innerHTML = ICONS.pause;
                         showToast('Switched to full file — screen off safe');
                     } catch (e) {
-                        playBtn.textContent = '▶';
+                        playBtn.innerHTML = '▶';
                         state.isPlaying = false;
                     }
 
@@ -1525,7 +1545,7 @@ function setupAudioEvents() {
     audio.addEventListener('play', () => {
         dlog('audio:play');
         state.isPlaying = true;
-        document.getElementById('btn-play-pause').textContent = '⏸';
+        document.getElementById('btn-play-pause').innerHTML = ICONS.pause;
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
         // The chapter element holds the session while playing; the silence
         // loop only runs across pauses.
@@ -1543,7 +1563,7 @@ function setupAudioEvents() {
         dlog('audio:pause', { instant: state._instantActive ? 1 : 0 });
         state.isPlaying = false;
         if (!state.isSynthesizing) {
-            document.getElementById('btn-play-pause').textContent = '▶';
+            document.getElementById('btn-play-pause').innerHTML = '▶';
         }
         // The keepalive is Web Audio, not a second media element, so starting
         // it does not change what iOS considers the Now Playing item — this
@@ -1610,7 +1630,7 @@ function setupAudioEvents() {
 
         dlog('audio:ended');
         state.isPlaying = false;
-        document.getElementById('btn-play-pause').textContent = '▶';
+        document.getElementById('btn-play-pause').innerHTML = '▶';
         saveProgress();
 
         // Auto-play next chapter (per-novel override wins)
@@ -2161,7 +2181,7 @@ async function toggleFavorite(novelId) {
         novel.favorite = result.favorite;
         renderLibrary();
         updateFavoriteButton();
-        showToast(novel.favorite ? '⭐ Added to favorites' : 'Removed from favorites');
+        showToast(novel.favorite ? '★ Added to favorites' : 'Removed from favorites');
     } catch (e) {
         showToast('Failed: ' + e.message);
     }
@@ -2170,7 +2190,7 @@ async function toggleFavorite(novelId) {
 function updateFavoriteButton() {
     const btn = document.getElementById('btn-favorite');
     const fav = !!state.currentNovel?.favorite;
-    btn.textContent = fav ? '⭐' : '☆';
+    btn.textContent = fav ? '★' : '☆';
     btn.title = fav ? 'Unfavorite' : 'Favorite';
     updateArchiveButton();
 }
@@ -2178,9 +2198,8 @@ function updateFavoriteButton() {
 function updateArchiveButton() {
     const btn = document.getElementById('btn-archive');
     if (!btn) return;
-    // Closed box = filed away, open box = ready to take back out.
     const archived = !!state.currentNovel?.archived;
-    btn.textContent = archived ? '📂' : '📦';
+    btn.innerHTML = ICONS.archive;
     btn.title = archived ? 'Unarchive' : 'Archive';
     btn.classList.toggle('is-archived', archived);
 }
@@ -2813,8 +2832,8 @@ async function refreshExports() {
     for (const j of jobs) {
         const prev = lastJobStatuses[j.id];
         if (prev && prev !== j.status) {
-            if (j.status === 'completed') showToast(`✅ Export done: ${j.novel_title}`, 6000);
-            if (j.status === 'failed') showToast(`❌ Export failed: ${j.error || 'see Exports panel'}`, 8000);
+            if (j.status === 'completed') showToast(`✓ Export done: ${j.novel_title}`, 6000);
+            if (j.status === 'failed') showToast(`✗ Export failed: ${j.error || 'see Exports panel'}`, 8000);
         }
         lastJobStatuses[j.id] = j.status;
     }

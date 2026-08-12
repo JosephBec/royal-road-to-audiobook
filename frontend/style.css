@@ -306,6 +306,10 @@ a:hover { color: var(--accent-hover); }
 .novel-card-fav:not(.is-fav) { opacity: 0; transition: opacity 0.12s; }
 .novel-card:hover .novel-card-fav:not(.is-fav) { opacity: 1; }
 
+/* The archive icon is one shape now (no more open-box/closed-box emoji
+   swap); "already archived" reads through accent color instead. */
+#btn-archive.is-archived { color: var(--accent); border-color: var(--accent); }
+
 .novel-card.dragging {
     opacity: 0.6;
     transform: scale(1.04);
