@@ -326,11 +326,12 @@ const ICONS = {
     hourglass: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 5 6 5 9s-5 4-5 9M17 3c0 5-5 6-5 9s5 4 5 9"/></svg>',
     book: '<svg viewBox="0 0 24 24" width="1.6em" height="1.6em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13c-3-.5-6 0-8 1.5z"/><path d="M12 6v13"/></svg>',
     pause: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
-    // A hex nut, not a gear-with-teeth: the first attempt (a ring with short
-    // radiating lines) was structurally the same shape as the sun icon
-    // (circle + rays) and was, correctly, called out as looking like one.
-    // This has no radiating lines at all.
-    gear: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4L19 8V16L12 20L5 16V8Z"/><circle cx="12" cy="12" r="2.8"/></svg>',
+    // A real 6-tooth cog silhouette, computed (not hand-guessed) so the
+    // teeth come out even: alternating outer/inner radius around the
+    // circle, flat-topped teeth rather than pointed rays. Two earlier
+    // attempts — a ring with short radiating lines, then a hex nut — were
+    // both called out as not actually reading as a gear.
+    gear: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" fill-rule="evenodd"><path d="M18.8 12.0 L18.6 13.8 L21.2 14.5 L18.7 18.7 L16.8 16.8 L15.4 17.9 L13.8 18.6 L14.5 21.2 L9.5 21.2 L10.2 18.6 L8.6 17.9 L7.2 16.8 L5.3 18.7 L2.8 14.5 L5.4 13.8 L5.2 12.0 L5.4 10.2 L2.8 9.5 L5.3 5.3 L7.2 7.2 L8.6 6.1 L10.2 5.4 L9.5 2.8 L14.5 2.8 L13.8 5.4 L15.4 6.1 L16.8 7.2 L18.7 5.3 L21.2 9.5 L18.6 10.2 Z M8.7 12 A3.3 3.3 0 1 0 15.3 12 A3.3 3.3 0 1 0 8.7 12 Z"/></svg>',
 };
 
 function escapeHtml(s) {
