@@ -1966,7 +1966,7 @@ function openSettings() {
     // Populate model dropdown. With no engines reported (a server older than
     // these assets) hide the row rather than showing an empty, dead select.
     const engineSelect = document.getElementById('setting-engine');
-    engineSelect.closest('.setting-row').style.display =
+    engineSelect.closest('.setting-stack').style.display =
         state.engines.length ? '' : 'none';
     engineSelect.innerHTML = engineOptionsHtml(state.settings.engine);
 

@@ -1452,17 +1452,39 @@ a:hover { color: var(--accent-hover); }
     border-color: var(--accent);
 }
 
+/* Label-above-control rows (Model, Voice, Playback Mode, Chapter Sort, the
+   whole Export tab, Theme) — a select/input gets the full row width instead
+   of being squeezed into whatever's left beside a label, which is what made
+   these unreadable on a phone. */
+.setting-stack select,
+.setting-stack input[type="text"],
+.setting-stack input[type="password"] {
+    width: 100%;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.setting-stack select:focus,
+.setting-stack input[type="text"]:focus,
+.setting-stack input[type="password"]:focus {
+    border-color: var(--accent);
+}
+/* Plex library: label, select, "Load libraries" each their own row. */
+.setting-stack #btn-load-libraries {
+    width: 100%;
+    margin-top: 8px;
+}
+
 .modal-content h3.settings-heading {
     margin: 16px 0 8px;
     font-size: 0.95em;
     font-weight: 600;
     opacity: 0.8;
-}
-
-.plex-section-control {
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 
 .btn-small {

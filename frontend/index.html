@@ -161,15 +161,15 @@
                 <button class="lib-tab settings-tab" data-tab="theme">Theme</button>
             </div>
             <div id="settings-panel-playback" class="settings-panel">
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="setting-engine">Model</label>
                 <select id="setting-engine"></select>
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="setting-voice">Voice</label>
                 <select id="setting-voice"></select>
+                <p class="setting-hint" id="engine-hint"></p>
             </div>
-            <div class="setting-row setting-hint" id="engine-hint"></div>
             <div class="setting-row">
                 <label for="setting-speed">Speed</label>
                 <div class="speed-control">
@@ -178,7 +178,7 @@
                     <button id="speed-up" class="small-btn">+</button>
                 </div>
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="setting-mode">Playback Mode</label>
                 <select id="setting-mode">
                     <option value="full">Full Chapter (wait for complete file)</option>
@@ -193,7 +193,7 @@
                 <label for="setting-keepalive">Keep lock-screen controls alive (iOS)</label>
                 <input type="checkbox" id="setting-keepalive">
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="setting-chapter-sort">Chapter Sort Order</label>
                 <select id="setting-chapter-sort">
                     <option value="asc">Ascending (1, 2, 3...)</option>
@@ -202,26 +202,24 @@
             </div>
             </div>
             <div id="settings-panel-export" class="settings-panel" style="display:none;">
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="audiobook-dir">Audiobook folder</label>
                 <input type="text" id="audiobook-dir" placeholder="E:\Plex\Audiobooks\Audiobooks">
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="plex-url">Plex server URL</label>
                 <input type="text" id="plex-url" placeholder="http://localhost:32400">
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="plex-token">Plex token</label>
                 <input type="password" id="plex-token" placeholder="X-Plex-Token">
             </div>
-            <div class="setting-row">
+            <div class="setting-stack">
                 <label for="plex-section">Plex library</label>
-                <div class="plex-section-control">
-                    <select id="plex-section">
-                        <option value="">— load libraries first —</option>
-                    </select>
-                    <button id="btn-load-libraries" class="secondary-btn btn-small">Load libraries</button>
-                </div>
+                <select id="plex-section">
+                    <option value="">— load libraries first —</option>
+                </select>
+                <button id="btn-load-libraries" class="secondary-btn btn-small">Load libraries</button>
             </div>
             </div>
             <div id="settings-panel-voices" class="settings-panel" style="display:none;">
