@@ -366,13 +366,19 @@ def _chapters_from_toc(documents, toc_entries, min_chapter_words) -> list[Parsed
             continue
 
         # Cut points inside this document, in document order. An entry whose
-        # anchor is missing is ignored rather than guessed at.
+        # anchor is missing behaves like an entry with no fragment at all —
+        # readers land at the top of the file — because some books (Calibre's
+        # Kindle conversions) keep synthetic NCX anchors that exist in no
+        # document, and ignoring those entries discards every boundary in
+        # the book.
         cuts: list[tuple[int, str]] = []
         for anchor, label in by_file.get(item.get_name().rsplit("/", 1)[-1], []):
-            offset = 0 if anchor is None else _anchor_offset(raw, anchor)
-            if offset is not None:
-                cuts.append((offset, label))
+            offset = _anchor_offset(raw, anchor) if anchor is not None else None
+            cuts.append((offset if offset is not None else 0, label))
         cuts.sort(key=lambda c: c[0])
+        # Entries that collapse onto the same offset would open zero-length
+        # chapters; the first label wins, as it does in a per-file TOC.
+        cuts = [c for i, c in enumerate(cuts) if i == 0 or c[0] != cuts[i - 1][0]]
 
         # Text before the first cut still belongs to the previous chapter —
         # this is the part that was being lost: a chapter's body sitting ahead

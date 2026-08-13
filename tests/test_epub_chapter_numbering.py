@@ -271,6 +271,61 @@ def test_text_before_an_anchor_stays_with_the_earlier_chapter(tmp_path):
         "chapter 1 has two paragraphs to chapter 2's one"
 
 
+def _epub_with_phantom_anchors(path):
+    """Every TOC href carries an anchor that exists in no document.
+
+    Calibre's Kindle conversions do this: the NCX keeps synthetic position
+    anchors ("2RHM0-<uuid>") that were never written into the split HTML
+    files. A reader landing on a missing fragment falls back to the top of
+    the file, so the entry must behave like a file-level boundary — not be
+    ignored, which discards every boundary in the book and yields zero
+    chapters ("12 Miles Below" regression).
+
+    The chapter body also lives in a follow-on _split_001 file with no TOC
+    entry of its own, exactly like the real book: the anchored stub holds
+    only a decorative heading.
+    """
+    from ebooklib import epub as e
+    book = e.EpubBook()
+    book.set_identifier("phantom")
+    book.set_title("Phantom Anchors")
+    book.set_language("en")
+    docs, toc = [], []
+    for i, title in enumerate(["1. Only a Nightmare", "2. Prelude to Violence",
+                               "3. You Should Have Left"], start=1):
+        stub = e.EpubHtml(title=title, file_name=f"part{i:04d}_split_000.html",
+                          lang="en", media_type="application/xhtml+xml")
+        stub.content = (f'<html><body><div id="chapter-{i}">'
+                        f'<span>CHAPTER</span> <span>{i}</span></div></body></html>')
+        body = e.EpubHtml(title="", file_name=f"part{i:04d}_split_001.html",
+                          lang="en", media_type="application/xhtml+xml")
+        body.content = f"<html><body><p>{LONG_PARA}</p></body></html>"
+        book.add_item(stub)
+        book.add_item(body)
+        docs += [stub, body]
+        toc.append(e.Link(f"part{i:04d}_split_000.html#ABC{i}0-5df9f4d005b041fd",
+                          title, f"num_{i}"))
+    book.toc = toc
+    book.add_item(e.EpubNcx())
+    book.add_item(e.EpubNav())
+    book.spine = ["nav"] + docs
+    e.write_epub(str(path), book)
+    return path
+
+
+def test_phantom_anchors_fall_back_to_file_boundaries(tmp_path):
+    parsed = parse_epub_file(_epub_with_phantom_anchors(tmp_path / "ph.epub"))
+    assert [c.number for c in parsed.chapters] == [1, 2, 3]
+
+
+def test_phantom_anchor_chapters_keep_their_split_body_text(tmp_path):
+    parsed = parse_epub_file(_epub_with_phantom_anchors(tmp_path / "ph.epub"))
+    words_per_para = len(LONG_PARA.split())
+    for ch in parsed.chapters:
+        assert ch.word_count >= words_per_para, \
+            f"chapter {ch.number} lost its _split_001 body"
+
+
 def test_anchor_offset_finds_id_and_name():
     from scrapers.epub_local import _anchor_offset
     assert _anchor_offset('<p id="filepos99">x</p>', "filepos99") is not None
