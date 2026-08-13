@@ -109,11 +109,14 @@ async def lifespan(app: FastAPI):
     prefetch.start_worker()
     import epub_library
     epub_library.start()
+    import description_backfill
+    description_backfill.start()
     logger.info("Novel TTS server ready (version=%s, started %s).",
                 APP_VERSION, STARTED_AT.isoformat())
     yield
     prefetch.stop()
     epub_library.stop()
+    description_backfill.stop()
     logger.info("Shutting down — applying audio cache retention policy...")
     _retention_cleanup()
 
